@@ -111,3 +111,4 @@ dosya uninstall                  # Remove CLI and config
 ## License
 
 [MIT](LICENSE)
+
