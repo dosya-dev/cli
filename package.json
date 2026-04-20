@@ -6,6 +6,9 @@
   "main": "./src/index.ts",
   "scripts": {
     "dev": "bun run src/index.ts",
+    "test": "bun test",
+    "test:unit": "bun test tests/unit",
+    "test:integration": "bun test tests/integration",
     "build": "bun build --compile src/index.ts --outfile dist/dosya",
     "build:linux-x64": "bun build --compile --target=bun-linux-x64 src/index.ts --outfile dist/dosya-linux-x64",
     "build:darwin-arm64": "bun build --compile --target=bun-darwin-arm64 src/index.ts --outfile dist/dosya-darwin-arm64",
