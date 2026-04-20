@@ -1,0 +1,23 @@
+{
+  "name": "@dosya-dev/cli",
+  "version": "0.0.2",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build --compile src/index.ts --outfile dist/dosya",
+    "build:linux-x64": "bun build --compile --target=bun-linux-x64 src/index.ts --outfile dist/dosya-linux-x64",
+    "build:darwin-arm64": "bun build --compile --target=bun-darwin-arm64 src/index.ts --outfile dist/dosya-darwin-arm64",
+    "build:darwin-x64": "bun build --compile --target=bun-darwin-x64 src/index.ts --outfile dist/dosya-darwin-x64",
+    "build:windows-x64": "bun build --compile --target=bun-windows-x64 src/index.ts --outfile dist/dosya-windows-x64.exe",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@dosya-dev/shared": "file:../../packages/shared"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "typescript": "^5.7.0"
+  }
+}
