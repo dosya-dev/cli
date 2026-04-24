@@ -72,7 +72,7 @@ export async function login(flags: Record<string, string>): Promise<void> {
         fatal("Invalid API key. Keys start with 'dos_'. Get yours at https://dosya.dev/settings/api-keys", EXIT.USAGE);
     }
 
-    const apiBase = flags.api ?? "https://dosya.dev";
+    const apiBase = flags.api ?? process.env.DOSYA_API_BASE ?? "https://dosya.dev";
     const client = new DosyaClient(apiBase, apiKey);
 
     try {

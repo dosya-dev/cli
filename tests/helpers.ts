@@ -30,11 +30,12 @@ export async function runCli(args: string[], env?: Record<string, string>): Prom
     stderr: string;
     exitCode: number;
 }> {
-    const proc = Bun.spawn(["bun", "run", "src/index.ts", ...args], {
+    const proc = Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
         cwd: import.meta.dir + "/..",
         env: {
             ...process.env,
             DOSYA_API_KEY: getApiKey(),
+            DOSYA_API_BASE: getApiBase(),
             // Prevent config file from interfering
             XDG_CONFIG_HOME: "/tmp/dosya-test-config-" + Date.now(),
             ...env,

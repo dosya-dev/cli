@@ -70,6 +70,6 @@ export async function requireAuth(flagKey?: string): Promise<{ apiKey: string; a
         process.exit(EXIT.AUTH);
     }
 
-    const apiBase = config?.api_base ?? "https://dosya.dev";
+    const apiBase = process.env.DOSYA_API_BASE ?? config?.api_base ?? "https://dosya.dev";
     return { apiKey, apiBase, config };
 }

@@ -199,7 +199,7 @@ export async function upload(args: string[], flags: Record<string, string>): Pro
         fatal("Directory is empty.");
     }
 
-    log(`Uploading ${allFiles.length} files...`);
+    if (flags.json === undefined) log(`Uploading ${allFiles.length} files...`);
 
     // Build unique subdirectory set and create folders
     const folderMap = new Map<string, string>(); // relative dir path -> folder ID

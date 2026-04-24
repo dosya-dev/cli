@@ -55,7 +55,7 @@ describe("dosya share", () => {
     it("should create a share link with password", async () => {
         const { stdout, exitCode } = await runCli([
             "share", fileId,
-            "--password", "test123",
+            "--password", "test1234",
             "--json",
             "-k", apiKey,
         ]);

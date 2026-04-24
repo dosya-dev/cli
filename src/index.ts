@@ -68,7 +68,7 @@ async function main(): Promise<void> {
         return;
     }
 
-    if (flags.help !== undefined || args.length === 0) {
+    if (args.length === 0) {
         console.log(HELP);
         return;
     }
@@ -170,6 +170,10 @@ async function main(): Promise<void> {
             }
 
             default:
+                if (flags.help !== undefined) {
+                    console.log(HELP);
+                    return;
+                }
                 console.error(`Unknown command: ${command}. Run 'dosya --help' for usage.`);
                 process.exit(EXIT.USAGE);
         }
