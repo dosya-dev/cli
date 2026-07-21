@@ -1,6 +1,7 @@
-import { DosyaClient } from "../client";
+import { createClient } from "../client";
 import { requireAuth } from "../config";
-import { printTable, printJson, fatal, log, EXIT } from "../output";
+import { printTable, printJson, fatal, fatalError, log, EXIT } from "../output";
+import { confirm } from "../prompt";
 import { formatBytes } from "@dosya-dev/shared";
 
 const HELP = `Manage workspaces on dosya.dev.
@@ -29,7 +30,9 @@ interface Workspace {
     id: string;
     name: string;
     slug: string;
-    total_storage_used?: number;
+    /** The API reports usage as `storage_used_bytes`, plus a `storage` summary. */
+    storage_used_bytes?: number;
+    storage?: { used?: number; total?: number };
 }
 
 interface WorkspacesResponse {
@@ -37,11 +40,15 @@ interface WorkspacesResponse {
     workspaces: Workspace[];
 }
 
+function storageUsed(ws: Workspace): number | undefined {
+    return ws.storage?.used ?? ws.storage_used_bytes;
+}
+
 export async function workspaceList(flags: Record<string, string>): Promise<void> {
     if (flags.help !== undefined) { workspaceHelp(); return; }
 
     const { apiKey, apiBase } = await requireAuth(flags.key);
-    const client = new DosyaClient(apiBase, apiKey);
+    const client = createClient(apiBase, apiKey);
 
     try {
         const data = await client.get<WorkspacesResponse>("/api/workspaces");
@@ -56,15 +63,14 @@ export async function workspaceList(flags: Record<string, string>): Promise<void
             return;
         }
 
-        const rows = data.workspaces.map(ws => [
-            ws.id,
-            ws.name,
-            ws.total_storage_used ? formatBytes(ws.total_storage_used) : "-",
-        ]);
+        const rows = data.workspaces.map(ws => {
+            const used = storageUsed(ws);
+            return [ws.id, ws.name, used === undefined ? "-" : formatBytes(used)];
+        });
 
         printTable(["ID", "NAME", "STORAGE"], rows);
     } catch (err) {
-        fatal((err as Error).message);
+        fatalError(err);
     }
 }
 
@@ -72,7 +78,7 @@ export async function workspaceCreate(flags: Record<string, string>): Promise<vo
     if (flags.help !== undefined) { workspaceHelp(); return; }
 
     const { apiKey, apiBase } = await requireAuth(flags.key);
-    const client = new DosyaClient(apiBase, apiKey);
+    const client = createClient(apiBase, apiKey);
 
     const name = flags.name;
     if (!name) {
@@ -80,16 +86,22 @@ export async function workspaceCreate(flags: Record<string, string>): Promise<vo
     }
 
     try {
-        const data = await client.post<{ ok: boolean; id: string; name: string; slug: string }>("/api/workspaces", { name });
+        // The API nests the new record under `workspace`
+        const data = await client.post<{ ok: boolean; workspace: Workspace }>("/api/workspaces", { name });
 
         if (flags.json !== undefined) {
             printJson(data);
             return;
         }
 
-        log(`Created workspace: ${data.name} (${data.id})`);
+        const ws = data.workspace;
+        if (!ws?.id) {
+            fatal("Workspace created but the server returned an unexpected response.");
+        }
+
+        log(`Created workspace: ${ws.name} (${ws.id})`);
     } catch (err) {
-        fatal((err as Error).message);
+        fatalError(err);
     }
 }
 
@@ -97,30 +109,23 @@ export async function workspaceDelete(args: string[], flags: Record<string, stri
     if (flags.help !== undefined) { workspaceHelp(); return; }
 
     const { apiKey, apiBase } = await requireAuth(flags.key);
-    const client = new DosyaClient(apiBase, apiKey);
+    const client = createClient(apiBase, apiKey);
 
-    const wsId = args[0] ?? flags.id;
+    const wsId = args[0] || flags.id;
     if (!wsId) {
         fatal("Workspace ID required. Usage: dosya workspace delete <workspace_id>", EXIT.USAGE);
     }
 
-    const isForce = flags.force !== undefined || flags.f !== undefined;
+    const isForce = flags.force !== undefined;
 
     // Confirm unless --force
-    if (!isForce) {
-        if (!process.stdin.isTTY) {
-            fatal("Cannot prompt for confirmation in non-interactive mode. Use --force to skip.", EXIT.USAGE);
-        }
-
-        process.stdout.write(`Delete workspace ${wsId}? This cannot be undone. [y/N] `);
-        const reader = Bun.stdin.stream().getReader();
-        const { value } = await reader.read();
-        reader.releaseLock();
-        const answer = new TextDecoder().decode(value).trim().toLowerCase();
-        if (answer !== "y" && answer !== "yes") {
-            console.log("Cancelled.");
-            return;
-        }
+    const confirmed = await confirm(`Delete workspace ${wsId}? This cannot be undone.`, { force: isForce });
+    if (confirmed === null) {
+        fatal("Cannot prompt for confirmation in non-interactive mode. Use --force to skip.", EXIT.USAGE);
+    }
+    if (!confirmed) {
+        console.log("Cancelled.");
+        return;
     }
 
     try {
@@ -133,6 +138,6 @@ export async function workspaceDelete(args: string[], flags: Record<string, stri
 
         log(`Deleted workspace ${wsId}`);
     } catch (err) {
-        fatal((err as Error).message);
+        fatalError(err);
     }
 }

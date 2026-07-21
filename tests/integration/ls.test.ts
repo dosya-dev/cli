@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from "bun:test";
-import { runCli, getWorkspaceId } from "../helpers";
+import { LIVE_API, runCli, getWorkspaceId } from "../helpers";
 
-describe("dosya ls", () => {
+describe.skipIf(!LIVE_API)("dosya ls", () => {
     const apiKey = process.env.DOSYA_TEST_API_KEY!;
     let workspaceId: string;
 

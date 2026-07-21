@@ -1,5 +1,7 @@
-import { setOutputFlags, fatal, EXIT } from "./output";
+import { setOutputFlags, EXIT } from "./output";
 import { parseArgs } from "./parse-args";
+import { setRequestTimeout, runCleanup } from "./runtime";
+import { AuthError, NetworkError } from "./errors";
 import pkg from "../package.json";
 
 const VERSION = pkg.version;
@@ -15,8 +17,20 @@ Commands:
   download <id>        Download a file by ID
   share <id>           Generate a share link
   ls [workspace]       List files in workspace
-  rm <id>              Delete a file
-  mv <id> <target>     Move or rename a file
+  search <query>       Search files, folders and shares
+  info <file>          Show file metadata (alias: stat)
+  tree [path]          Print the folder tree
+  usage                Show storage usage and quota (alias: df)
+  rm <id>              Delete a file or folder
+  mv <id> <target>     Move or rename a file or folder
+  cp <file> <folder>   Copy a file into a folder
+  mkdir <path>         Create a folder
+  star <target>        Add files/folders to favourites
+  unstar <target>      Remove from favourites
+  starred              List favourites
+  trash list           List, restore or empty the trash
+  versions <file>      List or restore file versions
+  sync add             Bidirectional folder sync (add/list/run/watch)
   workspace list       List all workspaces
   workspace create     Create a new workspace
   workspace delete     Delete a workspace
@@ -43,25 +57,40 @@ Global flags:
 
 Environment variables:
   DOSYA_API_KEY        API key (same as --key)
+  DOSYA_API_BASE       API base URL (default: https://api.dosya.dev)
+  NO_COLOR             Disable colors and unicode (same as --no-color)
+
+Exit codes:
+  0 success   1 error   2 usage   3 auth failure   4 network failure
 
 Run 'dosya <command> --help' for command-specific help.
 
 https://dosya.dev/developer/cli`;
 
-// Handle SIGINT (Ctrl+C) cleanly
-process.on("SIGINT", () => {
-    process.stderr.write("\nInterrupted.\n");
-    process.exit(130);
-});
+let interrupted = false;
+
+function handleSignal(signal: string, code: number): void {
+    if (interrupted) process.exit(code);
+    interrupted = true;
+    runCleanup();
+    process.stderr.write(`\n${signal === "SIGINT" ? "Interrupted" : "Terminated"}.\n`);
+    process.exit(code);
+}
+
+process.on("SIGINT", () => handleSignal("SIGINT", 130));
+process.on("SIGTERM", () => handleSignal("SIGTERM", 143));
 
 async function main(): Promise<void> {
-    const { args, flags } = parseArgs(process.argv.slice(2));
+    const { args, flags, multi } = parseArgs(process.argv.slice(2));
 
     // Set global output mode flags before any command runs
     setOutputFlags({
         quiet: flags.quiet !== undefined,
         debug: flags.debug !== undefined,
+        // https://no-color.org — any non-empty value disables styling
+        noColor: flags["no-color"] !== undefined || Boolean(process.env.NO_COLOR),
     });
+    setRequestTimeout(flags.timeout);
 
     if (flags.version !== undefined) {
         console.log(`dosya ${VERSION}`);
@@ -97,6 +126,28 @@ async function main(): Promise<void> {
                 return await ls([sub, ...rest].filter(Boolean), flags);
             }
 
+            case "search": {
+                const { search } = await import("./commands/search");
+                return await search([sub, ...rest].filter(Boolean), flags);
+            }
+
+            case "info":
+            case "stat": {
+                const { info } = await import("./commands/info");
+                return await info([sub, ...rest].filter(Boolean), flags);
+            }
+
+            case "tree": {
+                const { tree } = await import("./commands/tree");
+                return await tree([sub, ...rest].filter(Boolean), flags);
+            }
+
+            case "usage":
+            case "df": {
+                const { usage } = await import("./commands/usage");
+                return await usage(flags);
+            }
+
             case "upload": {
                 const { upload } = await import("./commands/upload");
                 return await upload([sub, ...rest].filter(Boolean), flags);
@@ -120,6 +171,46 @@ async function main(): Promise<void> {
             case "mv": {
                 const { mv } = await import("./commands/mv");
                 return await mv([sub, ...rest].filter(Boolean), flags);
+            }
+
+            case "cp": {
+                const { cp } = await import("./commands/cp");
+                return await cp([sub, ...rest].filter(Boolean), flags);
+            }
+
+            case "mkdir": {
+                const { mkdir } = await import("./commands/mkdir");
+                return await mkdir([sub, ...rest].filter(Boolean), flags);
+            }
+
+            case "star": {
+                const { star } = await import("./commands/star");
+                return await star([sub, ...rest].filter(Boolean), flags);
+            }
+
+            case "unstar": {
+                const { unstar } = await import("./commands/star");
+                return await unstar([sub, ...rest].filter(Boolean), flags);
+            }
+
+            case "starred": {
+                const { starred } = await import("./commands/star");
+                return await starred(flags);
+            }
+
+            case "trash": {
+                const { trash } = await import("./commands/trash");
+                return await trash([sub, ...rest].filter(Boolean), flags);
+            }
+
+            case "versions": {
+                const { versions } = await import("./commands/versions");
+                return await versions([sub, ...rest].filter(Boolean), flags);
+            }
+
+            case "sync": {
+                const { sync } = await import("./commands/sync");
+                return await sync([sub, ...rest].filter(Boolean), flags, multi);
             }
 
             case "workspace": {
@@ -178,27 +269,23 @@ async function main(): Promise<void> {
                 process.exit(EXIT.USAGE);
         }
     } catch (err) {
-        const { AuthError, NetworkError } = await import("./client");
+        runCleanup();
 
-        if (err instanceof AuthError) {
-            console.error(`error: ${err.message}`);
-            process.exit(EXIT.AUTH);
-        }
-
-        if (err instanceof NetworkError) {
-            console.error(`error: ${err.message}`);
-            process.exit(EXIT.NETWORK);
-        }
-
-        const message = (err as Error).message ?? String(err);
+        const message = err instanceof Error ? err.message : String(err);
         console.error(`error: ${message}`);
 
-        if (flags.debug !== undefined) {
-            console.error((err as Error).stack ?? "");
+        if (flags.debug !== undefined && err instanceof Error && err.stack) {
+            console.error(err.stack);
         }
 
+        if (err instanceof AuthError) process.exit(EXIT.AUTH);
+        if (err instanceof NetworkError) process.exit(EXIT.NETWORK);
         process.exit(EXIT.ERROR);
     }
 }
 
-main();
+main().catch((err: unknown) => {
+    runCleanup();
+    console.error(`error: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(EXIT.ERROR);
+});

@@ -1,4 +1,4 @@
-import { loadConfig, saveConfig, getConfigPath } from "../config";
+import { loadConfig, updateConfig, getConfigPath, type DosyaConfig } from "../config";
 import { printJson, fatal, log, EXIT } from "../output";
 
 const HELP = `Manage CLI configuration.
@@ -31,6 +31,18 @@ function isAllowedKey(key: string): key is ConfigKey {
     return (ALLOWED_KEYS as readonly string[]).includes(key);
 }
 
+/**
+ * Never print the stored API key.
+ *
+ * `config get --json` used to dump the raw config, so piping it anywhere —
+ * a log, a bug report, CI output — leaked the credential.
+ */
+function redact(config: DosyaConfig | null): Record<string, unknown> {
+    if (!config) return {};
+    const { api_key, ...rest } = config;
+    return { ...rest, api_key: api_key ? "<redacted>" : undefined };
+}
+
 export async function configGet(args: string[], flags: Record<string, string>): Promise<void> {
     if (flags.help !== undefined) { configHelp(); return; }
 
@@ -53,7 +65,7 @@ export async function configGet(args: string[], flags: Record<string, string>): 
 
     // Show all config
     if (flags.json !== undefined) {
-        printJson(config ?? {});
+        printJson(redact(config));
     } else if (!config) {
         log("No configuration found. Run: dosya auth login");
     } else {
@@ -78,8 +90,7 @@ export async function configSet(args: string[], flags: Record<string, string>): 
         fatal("Not authenticated. Run: dosya auth login", EXIT.AUTH);
     }
 
-    config[key] = value;
-    await saveConfig(config);
+    await updateConfig({ [key]: value });
 
     if (flags.json !== undefined) {
         printJson({ ok: true, key, value });

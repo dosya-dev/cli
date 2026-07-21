@@ -1,6 +1,6 @@
-import { DosyaClient } from "../client";
+import { createClient } from "../client";
 import { requireAuth } from "../config";
-import { printTable, printJson, timeAgo, fatal, log, EXIT } from "../output";
+import { printTable, printJson, timeAgo, fatal, fatalError, log, EXIT } from "../output";
 import { isValidEmail } from "@dosya-dev/shared";
 
 const HELP = `Manage workspace members on dosya.dev.
@@ -43,9 +43,9 @@ export async function memberList(flags: Record<string, string>): Promise<void> {
     if (flags.help !== undefined) { memberHelp(); return; }
 
     const { apiKey, apiBase, config } = await requireAuth(flags.key);
-    const client = new DosyaClient(apiBase, apiKey);
+    const client = createClient(apiBase, apiKey);
 
-    const workspaceId = flags.workspace ?? flags.w ?? config?.default_workspace;
+    const workspaceId = flags.workspace || config?.default_workspace;
     if (!workspaceId) {
         fatal("Workspace ID required. Use --workspace <id>", EXIT.USAGE);
     }
@@ -78,7 +78,7 @@ export async function memberList(flags: Record<string, string>): Promise<void> {
             log(`\n${data.invites.length} pending invite(s)`);
         }
     } catch (err) {
-        fatal((err as Error).message);
+        fatalError(err);
     }
 }
 
@@ -86,11 +86,11 @@ export async function memberInvite(flags: Record<string, string>): Promise<void>
     if (flags.help !== undefined) { memberHelp(); return; }
 
     const { apiKey, apiBase, config } = await requireAuth(flags.key);
-    const client = new DosyaClient(apiBase, apiKey);
+    const client = createClient(apiBase, apiKey);
 
-    const workspaceId = flags.workspace ?? flags.w ?? config?.default_workspace;
+    const workspaceId = flags.workspace || config?.default_workspace;
     const email = flags.email;
-    const role = flags.role ?? "Member";
+    const role = flags.role || "Member";
 
     if (!workspaceId) {
         fatal("Workspace ID required. Use --workspace <id>", EXIT.USAGE);
@@ -116,6 +116,6 @@ export async function memberInvite(flags: Record<string, string>): Promise<void>
 
         log(`Invited ${email} as ${role}`);
     } catch (err) {
-        fatal((err as Error).message);
+        fatalError(err);
     }
 }

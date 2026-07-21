@@ -1,59 +1,95 @@
-import { DosyaClient } from "../client";
+import { createClient } from "../client";
 import { requireAuth } from "../config";
-import { printJson, fatal, log, EXIT } from "../output";
+import { printJson, fatal, fatalError, log, EXIT } from "../output";
+import { Resolver, type Resolved } from "../resolver";
 
-const HELP = `Move or rename a file on dosya.dev.
+const HELP = `Move or rename files and folders on dosya.dev.
 
-Usage: dosya mv <file_id> <folder_id|new_name>
+Usage:
+  dosya mv <target> <new-name>        Rename (single target, bare name)
+  dosya mv <target...> <dest-folder>  Move into a folder
 
-If the target starts with "fld_", the file is moved to that folder.
-Otherwise, the file is renamed.
+<target> and <dest-folder> may be ids or paths. A bare workspace (ws_id:) as
+the destination moves into the workspace root.
 
 Flags:
-  --json, -j    Output as JSON
+  --workspace, -w <id>   Workspace for path lookups (or set a default)
+  --json, -j             Output as JSON
 
 Examples:
-  dosya mv fil_abc123 fld_xyz789       Move to folder
-  dosya mv fil_abc123 "new-name.pdf"   Rename file`;
+  dosya mv report.pdf final.pdf              Rename
+  dosya mv report.pdf reports/2026           Move into a folder
+  dosya mv a.txt b.txt archive               Move both into archive
+  dosya mv fld_abc ws_xyz:                    Move a folder to the root`;
 
 export function mvHelp(): void {
     console.log(HELP);
 }
 
+/** A bare name is a rename target: no path separator, no ws prefix, not an id. */
+function looksLikeName(s: string): boolean {
+    return !s.includes("/") && !s.includes(":") && !/^(file|fld|ws)_/.test(s);
+}
+
 export async function mv(args: string[], flags: Record<string, string>): Promise<void> {
     if (flags.help !== undefined) { mvHelp(); return; }
 
-    const { apiKey, apiBase } = await requireAuth(flags.key);
-    const client = new DosyaClient(apiBase, apiKey);
+    const { apiKey, apiBase, config } = await requireAuth(flags.key);
+    const client = createClient(apiBase, apiKey);
 
-    const fileId = args[0];
-    const target = args[1];
-
-    if (!fileId || !target) {
-        fatal("Usage: dosya mv <file_id> <folder_id|new_name>", EXIT.USAGE);
+    if (args.length < 2) {
+        fatal("Usage: dosya mv <target...> <dest>", EXIT.USAGE);
     }
 
+    const dest = args[args.length - 1];
+    const sources = args.slice(0, -1);
+    const opts = { workspace: flags.workspace, defaultWorkspace: config?.default_workspace };
+    const isJson = flags.json !== undefined;
+
     try {
-        // If target looks like a folder ID (fld_xxx), move the file
-        // Otherwise, treat it as a rename
-        if (target.startsWith("fld_")) {
-            await client.put(`/api/files/${encodeURIComponent(fileId)}/move`, { folder_id: target });
+        const resolver = new Resolver(client);
 
-            if (flags.json !== undefined) {
-                printJson({ ok: true, action: "move", id: fileId, folder_id: target });
+        // Rename: exactly one source and a bare-name destination.
+        if (sources.length === 1 && looksLikeName(dest)) {
+            const src = await resolver.resolve(sources[0], opts);
+            if (src.type === "file") {
+                await client.put(`/api/files/${encodeURIComponent(src.id)}/rename`, { name: dest });
             } else {
-                log(`Moved ${fileId} to ${target}`);
+                await client.put(`/api/folders/${encodeURIComponent(src.id)}/rename`, { name: dest });
             }
-        } else {
-            await client.put(`/api/files/${encodeURIComponent(fileId)}/rename`, { name: target });
+            if (isJson) printJson({ ok: true, action: "rename", id: src.id, name: dest });
+            else log(`Renamed to ${dest}`);
+            return;
+        }
 
-            if (flags.json !== undefined) {
-                printJson({ ok: true, action: "rename", id: fileId, name: target });
-            } else {
-                log(`Renamed ${fileId} to ${target}`);
+        // Move: destination is a folder (id "" = workspace root).
+        const destFolder = await resolver.resolve(dest, { ...opts, expect: "folder" });
+        const destId = destFolder.id || null;
+        const srcs: Resolved[] = await resolver.resolveMany(sources, opts);
+
+        let moved = 0;
+        const failures: { target: string; error: string }[] = [];
+        for (const s of srcs) {
+            try {
+                if (s.type === "file") {
+                    await client.put(`/api/files/${encodeURIComponent(s.id)}/move`, { folder_id: destId });
+                } else {
+                    await client.put(`/api/folders/${encodeURIComponent(s.id)}/move`, { parent_id: destId });
+                }
+                moved++;
+            } catch (err) {
+                failures.push({ target: s.name, error: (err as Error).message });
             }
         }
+
+        if (isJson) {
+            printJson({ ok: failures.length === 0, action: "move", moved, dest: destId, failures });
+        } else {
+            for (const f of failures) console.error(`Failed: ${f.target}: ${f.error}`);
+            log(`Moved ${moved} item(s).`);
+        }
+        if (failures.length > 0) process.exit(EXIT.ERROR);
     } catch (err) {
-        fatal((err as Error).message);
+        fatalError(err);
     }
 }

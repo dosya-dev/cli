@@ -2,17 +2,29 @@
   "name": "@dosya-dev/cli",
   "version": "0.0.2",
   "private": true,
+  "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "main": "./src/index.ts",
+  "bin": {
+    "dosya": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "bun": ">=1.2.0"
+  },
   "scripts": {
     "dev": "bun run src/index.ts",
     "test": "bun test",
     "test:unit": "bun test tests/unit",
     "test:integration": "bun test tests/integration",
-    "build": "bun build --compile src/index.ts --outfile dist/dosya",
+    "build": "bun build --compile src/index.ts --outfile dist/dosya && bun run scripts/sign.ts dist/dosya",
     "build:linux-x64": "bun build --compile --target=bun-linux-x64 src/index.ts --outfile dist/dosya-linux-x64",
-    "build:darwin-arm64": "bun build --compile --target=bun-darwin-arm64 src/index.ts --outfile dist/dosya-darwin-arm64",
-    "build:darwin-x64": "bun build --compile --target=bun-darwin-x64 src/index.ts --outfile dist/dosya-darwin-x64",
+    "build:darwin-arm64": "bun build --compile --target=bun-darwin-arm64 src/index.ts --outfile dist/dosya-darwin-arm64 && bun run scripts/sign.ts dist/dosya-darwin-arm64",
+    "build:darwin-x64": "bun build --compile --target=bun-darwin-x64 src/index.ts --outfile dist/dosya-darwin-x64 && bun run scripts/sign.ts dist/dosya-darwin-x64",
     "build:windows-x64": "bun build --compile --target=bun-windows-x64 src/index.ts --outfile dist/dosya-windows-x64.exe",
     "typecheck": "tsc --noEmit"
   },

@@ -1,4 +1,13 @@
 import { debug } from "./output";
+import { ApiError, AuthError, NetworkError } from "./errors";
+import { getRequestTimeout } from "./runtime";
+
+export { ApiError, AuthError, NetworkError };
+
+/** Build a client that honours the global `--timeout` flag. */
+export function createClient(apiBase: string, apiKey: string): DosyaClient {
+    return new DosyaClient(apiBase, apiKey, getRequestTimeout());
+}
 
 export interface ApiResponse<T = unknown> {
     ok: boolean;
@@ -16,39 +25,69 @@ interface RequestOptions {
     redirect?: RequestRedirect;
 }
 
-export class AuthError extends Error {
-    constructor(message: string) {
-        super(message);
-        this.name = "AuthError";
-    }
-}
-
-export class NetworkError extends Error {
-    constructor(message: string) {
-        super(message);
-        this.name = "NetworkError";
-    }
-}
-
 const RETRY_DELAYS = [1000, 3000, 8000];
+const MAX_RETRY_AFTER_MS = 60_000;
+
+/**
+ * Methods that are safe to replay after a 5xx or a transport error.
+ *
+ * POST is excluded because it creates resources (an invite retried three times
+ * sends three invites). DELETE is excluded because this API treats a second
+ * DELETE on a file as "permanently delete" — replaying a soft delete that
+ * actually succeeded would destroy the file.
+ */
+const RETRYABLE_METHODS = new Set(["GET", "HEAD", "PUT"]);
+
+/** Parse a Retry-After header (delta-seconds or HTTP-date) into milliseconds. */
+function parseRetryAfter(value: string | null): number | null {
+    if (!value) return null;
+
+    const seconds = Number(value);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+        return Math.min(seconds * 1000, MAX_RETRY_AFTER_MS);
+    }
+
+    const date = Date.parse(value);
+    if (!Number.isNaN(date)) {
+        return Math.min(Math.max(date - Date.now(), 0), MAX_RETRY_AFTER_MS);
+    }
+
+    return null;
+}
 
 export class DosyaClient {
     private apiBase: string;
     private apiKey: string;
+    private defaultTimeout: number;
 
-    constructor(apiBase: string, apiKey: string) {
+    constructor(apiBase: string, apiKey: string, defaultTimeout = 30_000) {
         this.apiBase = apiBase.replace(/\/$/, "");
         this.apiKey = apiKey;
+        this.defaultTimeout = defaultTimeout;
+    }
+
+    /**
+     * Only attach credentials to the configured API host, so a redirect or a
+     * server-supplied absolute URL can never exfiltrate the API key.
+     */
+    private isSameOrigin(url: string): boolean {
+        try {
+            return new URL(url).origin === new URL(this.apiBase).origin;
+        } catch {
+            return false;
+        }
     }
 
     async request<T = unknown>(path: string, opts: RequestOptions = {}): Promise<ApiResponse<T>> {
         const url = path.startsWith("http") ? path : `${this.apiBase}${path}`;
-        const method = opts.method ?? "GET";
+        const method = (opts.method ?? "GET").toUpperCase();
 
-        const headers: Record<string, string> = {
-            "Authorization": `Bearer ${this.apiKey}`,
-            ...opts.headers,
-        };
+        const headers: Record<string, string> = { ...opts.headers };
+        if (this.isSameOrigin(url)) {
+            headers["Authorization"] = `Bearer ${this.apiKey}`;
+        } else {
+            debug(`Omitting credentials for cross-origin request to ${url}`);
+        }
 
         let fetchBody: BodyInit | undefined;
         const isStreamBody = opts.rawBody instanceof ReadableStream;
@@ -61,10 +100,16 @@ export class DosyaClient {
             headers["Content-Type"] = "application/json";
         }
 
-        const timeoutMs = opts.timeout ?? 30_000;
+        const timeoutMs = opts.timeout ?? this.defaultTimeout;
         let lastError: Error | null = null;
-        // Stream bodies (ReadableStream) can only be consumed once — do not retry them
-        const maxRetries = isStreamBody ? 0 : RETRY_DELAYS.length;
+
+        // A ReadableStream body can only be consumed once, so it can never be
+        // resent. A non-idempotent method may only be replayed when the server
+        // tells us it did not process the request (429) — never after a 5xx or
+        // a transport error, where the write may well have landed.
+        const canResend = !isStreamBody;
+        const canReplay = canResend && RETRYABLE_METHODS.has(method);
+        const maxRetries = RETRY_DELAYS.length;
 
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
             try {
@@ -80,14 +125,27 @@ export class DosyaClient {
 
                 debug(`${method} ${url} → ${response.status}`);
 
-                // Auth errors — never retry
-                if (response.status === 401) {
-                    const data = await response.json().catch(() => ({ error: "Unauthorized" })) as T;
-                    throw new AuthError("Authentication failed. Run 'dosya auth login' to re-authenticate.");
+                // Auth errors — never retry. Drain the body first so the
+                // socket can be reused instead of being held open.
+                if (response.status === 401 || response.status === 403) {
+                    await response.body?.cancel().catch(() => {});
+                    throw new AuthError(
+                        response.status === 401
+                            ? "Authentication failed. Run 'dosya auth login' to re-authenticate."
+                            : "Permission denied. You don't have access to this resource.",
+                    );
                 }
-                if (response.status === 403) {
-                    const data = await response.json().catch(() => ({ error: "Forbidden" })) as T;
-                    throw new AuthError("Permission denied. You don't have access to this resource.");
+
+                // Rate limited. The request was rejected, not processed, so
+                // this is safe to replay for any method.
+                if (response.status === 429 && canResend && attempt < maxRetries) {
+                    const retryAfter = parseRetryAfter(response.headers.get("retry-after"));
+                    const waitMs = retryAfter ?? RETRY_DELAYS[attempt];
+                    lastError = new NetworkError("Rate limited by the server.");
+                    debug(`Rate limited (429). Waiting ${waitMs}ms before retry...`);
+                    await response.body?.cancel().catch(() => {});
+                    await Bun.sleep(waitMs);
+                    continue;
                 }
 
                 // Don't retry other client errors
@@ -96,10 +154,11 @@ export class DosyaClient {
                     return { ok: false, status: response.status, data, headers: response.headers };
                 }
 
-                // Retry 5xx (but not for stream bodies)
-                if (response.status >= 500 && attempt < maxRetries) {
+                // Retry 5xx where the method allows it
+                if (response.status >= 500 && canReplay && attempt < maxRetries) {
                     lastError = new Error(`Server error: ${response.status}`);
                     debug(`Retrying in ${RETRY_DELAYS[attempt]}ms...`);
+                    await response.body?.cancel().catch(() => {});
                     await Bun.sleep(RETRY_DELAYS[attempt]);
                     continue;
                 }
@@ -121,60 +180,52 @@ export class DosyaClient {
                 // Classify the error
                 if (err instanceof DOMException && err.name === "TimeoutError") {
                     lastError = new NetworkError(
-                        `Request timed out after ${timeoutMs / 1000}s. Check your connection or try again.`
+                        `Request timed out after ${Math.round(timeoutMs / 1000)}s. Check your connection or try again.`,
                     );
                 } else if (err instanceof TypeError && (err.message.includes("fetch") || err.message.includes("connect"))) {
                     lastError = new NetworkError(
-                        `Cannot reach ${this.apiBase}. Check your internet connection.`
+                        `Cannot reach ${this.apiBase}. Check your internet connection.`,
                     );
                 } else {
                     lastError = err as Error;
                 }
 
-                if (attempt < maxRetries) {
+                // A transport error gives no proof the server didn't act, so
+                // only idempotent methods may be replayed.
+                if (canReplay && attempt < maxRetries) {
                     debug(`Request error: ${lastError.message}. Retrying in ${RETRY_DELAYS[attempt]}ms...`);
                     await Bun.sleep(RETRY_DELAYS[attempt]);
                     continue;
                 }
+                break;
             }
         }
 
         throw lastError ?? new NetworkError("Request failed after retries.");
     }
 
-    async get<T = unknown>(path: string): Promise<T> {
-        const res = await this.request<T>(path);
+    /** Unwrap a response, turning a non-2xx into a typed ApiError. */
+    private unwrap<T>(res: ApiResponse<T>): T {
         if (!res.ok) {
             const err = res.data as { error?: string };
-            throw new Error(err?.error ?? `Request failed: ${res.status}`);
+            throw new ApiError(err?.error ?? `Request failed: ${res.status}`, res.status);
         }
         return res.data;
+    }
+
+    async get<T = unknown>(path: string): Promise<T> {
+        return this.unwrap(await this.request<T>(path));
     }
 
     async post<T = unknown>(path: string, body?: unknown): Promise<T> {
-        const res = await this.request<T>(path, { method: "POST", body });
-        if (!res.ok) {
-            const err = res.data as { error?: string };
-            throw new Error(err?.error ?? `Request failed: ${res.status}`);
-        }
-        return res.data;
+        return this.unwrap(await this.request<T>(path, { method: "POST", body }));
     }
 
     async put<T = unknown>(path: string, body?: unknown): Promise<T> {
-        const res = await this.request<T>(path, { method: "PUT", body });
-        if (!res.ok) {
-            const err = res.data as { error?: string };
-            throw new Error(err?.error ?? `Request failed: ${res.status}`);
-        }
-        return res.data;
+        return this.unwrap(await this.request<T>(path, { method: "PUT", body }));
     }
 
     async del<T = unknown>(path: string): Promise<T> {
-        const res = await this.request<T>(path, { method: "DELETE" });
-        if (!res.ok) {
-            const err = res.data as { error?: string };
-            throw new Error(err?.error ?? `Request failed: ${res.status}`);
-        }
-        return res.data;
+        return this.unwrap(await this.request<T>(path, { method: "DELETE" }));
     }
 }

@@ -1,5 +1,7 @@
-import { existsSync } from "fs";
+import { existsSync, chmodSync, renameSync, unlinkSync, copyFileSync } from "fs";
 import pkg from "../../package.json";
+import { loadConfig, resolveApiBase } from "../config";
+import { isCompiledBinary } from "../runtime";
 import { log, fatal, EXIT } from "../output";
 
 const HELP = `Upgrade the dosya CLI to the latest version.
@@ -18,6 +20,12 @@ export function upgradeHelp(): void {
     console.log(HELP);
 }
 
+interface VersionManifest {
+    version: string;
+    /** sha256 hex digests keyed by platform, published by the release workflow. */
+    checksums?: Record<string, string>;
+}
+
 function getPlatform(): string {
     const os = process.platform;
     const arch = process.arch;
@@ -28,70 +36,98 @@ function getPlatform(): string {
     if (os === "win32" && arch === "x64") return "windows";
 
     fatal(`Unsupported platform: ${os}-${arch}`, EXIT.ERROR);
-    return "";
+}
+
+function sha256(bytes: ArrayBuffer): string {
+    return new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
 }
 
 export async function upgrade(flags: Record<string, string>): Promise<void> {
     if (flags.help !== undefined) { upgradeHelp(); return; }
 
+    if (!isCompiledBinary()) {
+        fatal(
+            "dosya upgrade only works on an installed dosya binary. " +
+            "You are running from source — use git to update this checkout instead.",
+            EXIT.USAGE,
+        );
+    }
+
     const currentVersion = pkg.version;
     const binaryPath = process.execPath;
     const platform = getPlatform();
+    const apiBase = resolveApiBase(await loadConfig()).replace(/\/$/, "");
 
-    // Fetch latest version info
     log(`Current version: ${currentVersion}`);
     log("Checking for updates...");
 
-    let latestVersion: string;
+    let manifest: VersionManifest;
     try {
-        const res = await fetch("https://dosya.dev/api/cli/version");
+        const res = await fetch(`${apiBase}/api/cli/version`, { signal: AbortSignal.timeout(30_000) });
         if (!res.ok) {
-            fatal("Could not check for updates. Try again later.", EXIT.NETWORK);
+            fatal(`Could not check for updates (HTTP ${res.status}). Try again later.`, EXIT.NETWORK);
         }
-        const data = (await res.json()) as { version: string };
-        latestVersion = data.version;
+        manifest = (await res.json()) as VersionManifest;
     } catch {
-        fatal("Could not reach dosya.dev. Check your connection.", EXIT.NETWORK);
-        return;
+        fatal(`Could not reach ${apiBase}. Check your connection.`, EXIT.NETWORK);
     }
 
-    if (latestVersion === currentVersion && flags.force === undefined && flags.f === undefined) {
+    const latestVersion = manifest.version;
+    const isForce = flags.force !== undefined;
+
+    if (latestVersion === currentVersion && !isForce) {
         log(`Already on latest version (${currentVersion}).`);
         return;
     }
 
-    log(`Latest version:  ${latestVersion}`);
-    log(`Downloading...`);
+    const expectedChecksum = manifest.checksums?.[platform];
+    if (!expectedChecksum) {
+        fatal(
+            `The server did not publish a checksum for ${platform}, so this upgrade cannot be verified. ` +
+            `Download the binary manually from https://dosya.dev/developer/cli instead.`,
+            EXIT.ERROR,
+        );
+    }
 
-    // Download new binary
-    const downloadUrl = `https://dosya.dev/api/cli/latest?platform=${platform}`;
+    log(`Latest version:  ${latestVersion}`);
+    log("Downloading...");
+
     let binary: ArrayBuffer;
     try {
-        const res = await fetch(downloadUrl);
+        const res = await fetch(`${apiBase}/api/cli/latest?platform=${platform}`, {
+            signal: AbortSignal.timeout(300_000),
+        });
         if (!res.ok) {
-            fatal(`Download failed: ${res.status}`, EXIT.NETWORK);
+            fatal(`Download failed: HTTP ${res.status}`, EXIT.NETWORK);
         }
         binary = await res.arrayBuffer();
     } catch {
         fatal("Download failed. Check your connection.", EXIT.NETWORK);
-        return;
     }
 
-    // Write to temp file, then replace
+    // Verify before anything touches disk
+    const actualChecksum = sha256(binary);
+    if (actualChecksum !== expectedChecksum) {
+        fatal(
+            `Checksum mismatch — refusing to install.\n` +
+            `  expected: ${expectedChecksum}\n` +
+            `  actual:   ${actualChecksum}`,
+            EXIT.ERROR,
+        );
+    }
+    log("Checksum verified.");
+
     const tmpPath = binaryPath + ".tmp";
     try {
         await Bun.write(tmpPath, binary);
-
-        // Make executable
-        const { chmodSync } = await import("fs");
         chmodSync(tmpPath, 0o755);
 
-        // Sign on macOS
+        // Sign on macOS so Gatekeeper doesn't kill the replaced binary
         if (process.platform === "darwin") {
             try {
                 const proc = Bun.spawnSync(["ldid", "-S", tmpPath]);
                 if (proc.exitCode !== 0) {
-                    // ldid not available, try xattr
+                    // ldid not available, try clearing the quarantine attribute
                     Bun.spawnSync(["xattr", "-d", "com.apple.quarantine", tmpPath]);
                 }
             } catch {
@@ -99,26 +135,21 @@ export async function upgrade(flags: Record<string, string>): Promise<void> {
             }
         }
 
-        // Replace old binary
-        const { renameSync, unlinkSync } = await import("fs");
         try {
             renameSync(tmpPath, binaryPath);
         } catch {
             // rename may fail across filesystems, try copy
-            const { copyFileSync } = await import("fs");
             copyFileSync(tmpPath, binaryPath);
             unlinkSync(tmpPath);
         }
     } catch (err) {
-        // Clean up tmp file
         if (existsSync(tmpPath)) {
-            const { unlinkSync } = await import("fs");
             try { unlinkSync(tmpPath); } catch {}
         }
 
         const msg = (err as Error).message;
-        if (msg.includes("permission") || msg.includes("EACCES")) {
-            fatal(`Permission denied. Try: sudo dosya upgrade`, EXIT.ERROR);
+        if (msg.includes("permission") || msg.includes("EACCES") || msg.includes("EPERM")) {
+            fatal(`Permission denied writing to ${binaryPath}. Try: sudo dosya upgrade`, EXIT.ERROR);
         }
         fatal(`Upgrade failed: ${msg}`, EXIT.ERROR);
     }

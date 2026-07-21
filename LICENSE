@@ -1,21 +1,77 @@
-MIT License
+Dosya Source Available License
 
-Copyright (c) 2025 dosya.dev
+Version 1.0, July 2026
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+Copyright (c) 2025-2026 dosya.dev. All rights reserved.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. Acceptance
+
+By using, copying, modifying, or contributing to the Software, you agree to
+all of the terms of this license.
+
+2. Definitions
+
+"Software" means the source code, binaries, and documentation in this
+repository, and any modified versions of them.
+
+"Official Service" means the dosya.dev cloud storage service operated by
+dosya.dev and reachable at dosya.dev and its subdomains.
+
+"Contribution" means any work you intentionally submit for inclusion in the
+Software (for example, a pull request to this repository).
+
+3. What you may do
+
+  a. Read and audit. You may view, download, and study the source code for
+     any purpose.
+
+  b. Build and run. You may compile, install, and run the Software,
+     unmodified or with your own patches, for your personal use or your
+     organization's internal use, but only in connection with the Official
+     Service.
+
+  c. Contribute. You may fork this repository on GitHub and modify the
+     Software for the sole purpose of developing and submitting
+     Contributions back to this repository.
+
+4. What you may not do
+
+  a. Redistribute. You may not distribute, publish, sell, rent, lease, or
+     sublicense the Software or modified versions of it. Maintaining a
+     public fork on GitHub for the purpose of submitting Contributions is
+     allowed.
+
+  b. Use other backends. You may not use, adapt, or configure the Software
+     to connect to, interoperate with, or provide any service other than
+     the Official Service.
+
+  c. Compete. You may not use the Software, in whole or in part, to provide
+     a hosted, managed, or commercial service, or to build a product or
+     service that competes with the Official Service.
+
+  d. Remove notices. You may not remove or obscure copyright, license, or
+     attribution notices.
+
+5. Contributions
+
+By submitting a Contribution, you grant dosya.dev a perpetual, worldwide,
+irrevocable, royalty-free license to use, copy, modify, distribute, and
+relicense your Contribution as part of the Software or otherwise. You
+represent that you have the right to grant this license.
+
+6. Trademarks
+
+This license grants no rights to use the dosya.dev name, logo, or
+trademarks.
+
+7. Termination
+
+If you violate this license, your rights under it terminate automatically.
+If the violation is curable and you cure it within 30 days of becoming aware
+of it, your rights are reinstated.
+
+8. Disclaimer
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+IMPLIED. IN NO EVENT SHALL DOSYA.DEV BE LIABLE FOR ANY CLAIM, DAMAGES, OR
+OTHER LIABILITY ARISING FROM OR IN CONNECTION WITH THE SOFTWARE OR ITS USE.

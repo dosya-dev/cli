@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
-import { runCli, getWorkspaceId, uploadTestFile, deleteFile } from "../helpers";
+import { LIVE_API, runCli, getWorkspaceId, uploadTestFile, deleteFile } from "../helpers";
 
-describe("dosya share", () => {
+describe.skipIf(!LIVE_API)("dosya share", () => {
     const apiKey = process.env.DOSYA_TEST_API_KEY!;
     let workspaceId: string;
     let fileId: string;
@@ -79,7 +79,7 @@ describe("dosya share", () => {
         const { exitCode, stderr } = await runCli(["share", "-k", apiKey]);
 
         expect(exitCode).not.toBe(0);
-        expect(stderr).toContain("File ID required");
+        expect(stderr).toContain("File required");
     });
 
     it("should show help with --help", async () => {

@@ -6,12 +6,14 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "outDir": "./dist",
-    "rootDir": "./src",
-    "declaration": false,
+    "resolveJsonModule": true,
+    "types": ["bun"],
+    // The binary is produced by `bun build --compile`; tsc only typechecks.
+    // A rootDir here would reject the cross-package @dosya-dev/shared import.
+    "noEmit": true,
     "paths": {
       "@dosya-dev/shared": ["../../packages/shared/src"]
     }
   },
-  "include": ["src"]
+  "include": ["src", "tests"]
 }

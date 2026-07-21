@@ -1,7 +1,7 @@
 import { describe, it, expect } from "bun:test";
-import { runCli } from "../helpers";
+import { LIVE_API, runCli } from "../helpers";
 
-describe("dosya whoami", () => {
+describe.skipIf(!LIVE_API)("dosya whoami", () => {
     it("should show user info", async () => {
         const { stdout, exitCode } = await runCli(["whoami", "-k", process.env.DOSYA_TEST_API_KEY!]);
 

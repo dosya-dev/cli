@@ -21,7 +21,7 @@ describe("DosyaClient", () => {
                     status: 200,
                     headers: { "content-type": "application/json" },
                 });
-            }) as typeof fetch;
+            }) as unknown as typeof fetch;
 
             try {
                 const client = new DosyaClient("https://dosya.dev", "dos_mykey");
@@ -39,7 +39,7 @@ describe("DosyaClient", () => {
                     status: 200,
                     headers: { "content-type": "application/json" },
                 });
-            }) as typeof fetch;
+            }) as unknown as typeof fetch;
 
             try {
                 const client = new DosyaClient("https://dosya.dev", "dos_test");
@@ -59,7 +59,7 @@ describe("DosyaClient", () => {
                     status: 404,
                     headers: { "content-type": "application/json" },
                 });
-            }) as typeof fetch;
+            }) as unknown as typeof fetch;
 
             try {
                 const client = new DosyaClient("https://dosya.dev", "dos_test");
@@ -78,7 +78,7 @@ describe("DosyaClient", () => {
                     status: 401,
                     headers: { "content-type": "application/json" },
                 });
-            }) as typeof fetch;
+            }) as unknown as typeof fetch;
 
             try {
                 const client = new DosyaClient("https://dosya.dev", "dos_bad");
@@ -95,7 +95,7 @@ describe("DosyaClient", () => {
                     status: 403,
                     headers: { "content-type": "application/json" },
                 });
-            }) as typeof fetch;
+            }) as unknown as typeof fetch;
 
             try {
                 const client = new DosyaClient("https://dosya.dev", "dos_test");
@@ -117,7 +117,7 @@ describe("DosyaClient", () => {
                     status: 200,
                     headers: { "content-type": "application/json" },
                 });
-            }) as typeof fetch;
+            }) as unknown as typeof fetch;
 
             try {
                 const client = new DosyaClient("https://dosya.dev", "dos_test");
@@ -144,7 +144,7 @@ describe("DosyaClient", () => {
                     status: 200,
                     headers: { "content-type": "application/json" },
                 });
-            }) as typeof fetch;
+            }) as unknown as typeof fetch;
 
             try {
                 const client = new DosyaClient("https://dosya.dev", "dos_test");
@@ -169,7 +169,7 @@ describe("DosyaClient", () => {
                     status: 404,
                     headers: { "content-type": "application/json" },
                 });
-            }) as typeof fetch;
+            }) as unknown as typeof fetch;
 
             try {
                 const client = new DosyaClient("https://dosya.dev", "dos_test");
@@ -185,7 +185,7 @@ describe("DosyaClient", () => {
                     status: 200,
                     headers: { "content-type": "application/json" },
                 });
-            }) as typeof fetch;
+            }) as unknown as typeof fetch;
 
             try {
                 const client = new DosyaClient("https://dosya.dev", "dos_test");
@@ -204,7 +204,7 @@ describe("DosyaClient", () => {
                     status: 200,
                     headers: { "content-type": "application/json" },
                 });
-            }) as typeof fetch;
+            }) as unknown as typeof fetch;
 
             try {
                 const client = new DosyaClient("https://dosya.dev", "dos_test");
@@ -223,7 +223,7 @@ describe("DosyaClient", () => {
                     status: 200,
                     headers: { "content-type": "application/json" },
                 });
-            }) as typeof fetch;
+            }) as unknown as typeof fetch;
 
             try {
                 const client = new DosyaClient("https://dosya.dev", "dos_test");

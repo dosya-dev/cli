@@ -14,15 +14,97 @@ const SHORT_FLAGS: Record<string, string> = {
     h: "help",
 };
 
+/**
+ * Flags that take a value.
+ *
+ * Anything not listed here is a boolean and must NEVER consume the following
+ * token — otherwise `dosya ls --json ws_abc` silently swallows the workspace
+ * ID as the value of `--json`.
+ */
+const VALUE_FLAGS = new Set([
+    "api",
+    "conflict",
+    "connections",
+    "email",
+    "exclude",
+    "expires",
+    "folder",
+    "id",
+    "key",
+    "lock",
+    "message",
+    "mode",
+    "name",
+    "output",
+    "page",
+    "parallel",
+    "password",
+    "query",
+    "role",
+    "sort",
+    "timeout",
+    "type",
+    "version-of",
+    "workspace",
+]);
+
+/** Flags that take no value. */
+const BOOLEAN_FLAGS = new Set([
+    "debug",
+    "dry-run",
+    "force",
+    "help",
+    "json",
+    "no-color",
+    "no-verify",
+    "permanent",
+    "quiet",
+    "recursive",
+    "version",
+    "watch",
+    "zip",
+]);
+
+/**
+ * Value flags whose repeats accumulate instead of last-wins. `--exclude a
+ * --exclude b` yields `multi.exclude === ["a", "b"]` (and `flags.exclude`
+ * still holds the last value, for callers that only want one).
+ */
+const MULTI_FLAGS = new Set(["exclude"]);
+
 export interface ParsedArgs {
     args: string[];
     flags: Record<string, string>;
+    /** Accumulated values for repeatable flags (see MULTI_FLAGS). */
+    multi: Record<string, string[]>;
+}
+
+/** Negative numbers are legitimate flag values, unlike `-x` style flags. */
+function isNegativeNumber(text: string): boolean {
+    return /^-\d/.test(text);
+}
+
+/** A value flag may consume the next token unless it looks like another flag. */
+function canConsume(next: string | undefined): next is string {
+    if (next === undefined) return false;
+    // A bare "-" is the conventional stdin/stdout placeholder, not a flag
+    if (next === "-") return true;
+    return !next.startsWith("-") || isNegativeNumber(next);
 }
 
 export function parseArgs(argv: string[]): ParsedArgs {
     const args: string[] = [];
     const flags: Record<string, string> = {};
+    const multi: Record<string, string[]> = {};
     let seenSeparator = false;
+
+    /** Record a value flag, accumulating repeats for MULTI_FLAGS. */
+    const setFlag = (key: string, value: string): void => {
+        flags[key] = value;
+        if (MULTI_FLAGS.has(key) && value !== "") {
+            (multi[key] ??= []).push(value);
+        }
+    };
 
     for (let i = 0; i < argv.length; i++) {
         const arg = argv[i];
@@ -38,21 +120,43 @@ export function parseArgs(argv: string[]): ParsedArgs {
             continue;
         }
 
-        // Long flags: --flag or --flag value
+        // Long flags: --flag, --flag value, or --flag=value
         if (arg.startsWith("--")) {
-            const key = arg.slice(2);
-            const next = argv[i + 1];
-            if (!next || next.startsWith("-")) {
+            const body = arg.slice(2);
+            const eq = body.indexOf("=");
+            const key = eq === -1 ? body : body.slice(0, eq);
+            const inlineValue = eq === -1 ? null : body.slice(eq + 1);
+
+            if (BOOLEAN_FLAGS.has(key)) {
+                if (inlineValue !== null) {
+                    fatal(`Flag --${key} does not take a value.`, EXIT.USAGE);
+                }
                 flags[key] = "";
-            } else {
-                flags[key] = next;
+                continue;
+            }
+
+            if (!VALUE_FLAGS.has(key)) {
+                fatal(`Unknown flag: --${key}. Run 'dosya --help' for usage.`, EXIT.USAGE);
+            }
+
+            if (inlineValue !== null) {
+                setFlag(key, inlineValue);
+                continue;
+            }
+
+            const next = argv[i + 1];
+            if (canConsume(next)) {
+                setFlag(key, next);
                 i++;
+            } else {
+                // Left empty so the command can report a domain-specific error
+                flags[key] = "";
             }
             continue;
         }
 
         // Short flags: -j, -k value, or combined -jq
-        if (arg.startsWith("-") && arg.length > 1 && !arg.startsWith("--")) {
+        if (arg.startsWith("-") && arg.length > 1) {
             const chars = arg.slice(1);
             for (let c = 0; c < chars.length; c++) {
                 const ch = chars[c];
@@ -60,16 +164,24 @@ export function parseArgs(argv: string[]): ParsedArgs {
                 if (!longName) {
                     fatal(`Unknown flag: -${ch}. Run 'dosya --help' for usage.`, EXIT.USAGE);
                 }
-                // If this is the last char and the long flag expects a value, consume next arg
-                const isValueFlag = ["key", "workspace", "output", "parallel", "timeout", "connections"].includes(longName);
-                if (isValueFlag && c === chars.length - 1) {
-                    const next = argv[i + 1];
-                    if (next && !next.startsWith("-")) {
-                        flags[longName] = next;
-                        i++;
-                    } else {
-                        flags[longName] = "";
-                    }
+
+                if (!VALUE_FLAGS.has(longName)) {
+                    flags[longName] = "";
+                    continue;
+                }
+
+                // Only the last char of a combined group can take a value
+                if (c !== chars.length - 1) {
+                    fatal(
+                        `Flag -${ch} takes a value and must come last in a combined group (e.g. -${chars.replace(ch, "")}${ch} <value>).`,
+                        EXIT.USAGE,
+                    );
+                }
+
+                const next = argv[i + 1];
+                if (canConsume(next)) {
+                    setFlag(longName, next);
+                    i++;
                 } else {
                     flags[longName] = "";
                 }
@@ -80,5 +192,5 @@ export function parseArgs(argv: string[]): ParsedArgs {
         args.push(arg);
     }
 
-    return { args, flags };
+    return { args, flags, multi };
 }

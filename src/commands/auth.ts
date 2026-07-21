@@ -1,6 +1,6 @@
-import { loadConfig, saveConfig, deleteConfig } from "../config";
-import { DosyaClient, AuthError } from "../client";
-import { fatal, EXIT } from "../output";
+import { updateConfig, deleteConfig, DEFAULT_API_BASE } from "../config";
+import { createClient, AuthError } from "../client";
+import { fatal, fatalError, log, EXIT } from "../output";
 
 const HELP = `Authenticate with the dosya.dev API.
 
@@ -10,7 +10,7 @@ Usage:
 
 Flags:
   --key <key>     API key (skip interactive prompt)
-  --api <url>     API base URL (default: https://dosya.dev)
+  --api <url>     API base URL (default: ${DEFAULT_API_BASE})
 
 Examples:
   dosya auth login
@@ -21,6 +21,50 @@ export function authHelp(): void {
     console.log(HELP);
 }
 
+/** Read a line from stdin without echoing it back to the terminal. */
+async function promptHidden(prompt: string): Promise<string> {
+    process.stdout.write(prompt);
+
+    if (process.stdin.setRawMode) {
+        process.stdin.setRawMode(true);
+    }
+
+    const chunks: Uint8Array[] = [];
+    const reader = Bun.stdin.stream().getReader();
+
+    try {
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done || !value) break;
+
+            // Check for Ctrl+C
+            if (value.includes(3)) {
+                process.stdout.write("\n");
+                process.exit(130);
+            }
+
+            // Check for Enter key (CR or LF)
+            const cr = value.indexOf(13);
+            const lf = value.indexOf(10);
+            const enterIdx = cr !== -1 && lf !== -1 ? Math.min(cr, lf) : Math.max(cr, lf);
+            if (enterIdx !== -1) {
+                if (enterIdx > 0) chunks.push(value.slice(0, enterIdx));
+                break;
+            }
+
+            chunks.push(value);
+        }
+    } finally {
+        reader.releaseLock();
+        if (process.stdin.setRawMode) {
+            process.stdin.setRawMode(false);
+        }
+    }
+
+    process.stdout.write("\n");
+    return Buffer.concat(chunks).toString("utf-8").trim();
+}
+
 export async function login(flags: Record<string, string>): Promise<void> {
     let apiKey = flags.key;
 
@@ -28,66 +72,30 @@ export async function login(flags: Record<string, string>): Promise<void> {
         if (!process.stdin.isTTY) {
             fatal("Cannot prompt for API key in non-interactive mode. Use --key <key> or set DOSYA_API_KEY.", EXIT.USAGE);
         }
-
-        // Hide input: use raw mode to avoid echoing the API key
-        process.stdout.write("Enter API key: ");
-
-        if (process.stdin.setRawMode) {
-            process.stdin.setRawMode(true);
-        }
-
-        const chunks: Uint8Array[] = [];
-        const reader = Bun.stdin.stream().getReader();
-
-        try {
-            while (true) {
-                const { value, done } = await reader.read();
-                if (done || !value) break;
-
-                // Check for Enter key (CR or LF)
-                const enterIdx = value.indexOf(13) !== -1 ? value.indexOf(13) : value.indexOf(10);
-                if (enterIdx !== -1) {
-                    if (enterIdx > 0) chunks.push(value.slice(0, enterIdx));
-                    break;
-                }
-                // Check for Ctrl+C
-                if (value.includes(3)) {
-                    process.stdout.write("\n");
-                    process.exit(130);
-                }
-                chunks.push(value);
-            }
-        } finally {
-            reader.releaseLock();
-            if (process.stdin.setRawMode) {
-                process.stdin.setRawMode(false);
-            }
-        }
-
-        process.stdout.write("\n");
-        apiKey = Buffer.concat(chunks).toString("utf-8").trim();
+        apiKey = await promptHidden("Enter API key: ");
     }
 
     if (!apiKey || !apiKey.startsWith("dos_")) {
         fatal("Invalid API key. Keys start with 'dos_'. Get yours at https://dosya.dev/settings/api-keys", EXIT.USAGE);
     }
 
-    const apiBase = flags.api ?? process.env.DOSYA_API_BASE ?? "https://dosya.dev";
-    const client = new DosyaClient(apiBase, apiKey);
+    const apiBase = flags.api || process.env.DOSYA_API_BASE || DEFAULT_API_BASE;
+    const client = createClient(apiBase, apiKey);
 
     try {
         const data = await client.get<{ ok: boolean; user: { id: string; email: string; name: string } }>("/api/me");
-        await saveConfig({ api_key: apiKey, api_base: apiBase });
-        console.log(`Authenticated as ${data.user.name} (${data.user.email})`);
+        // Merge rather than overwrite, so an existing default_workspace survives
+        await updateConfig({ api_key: apiKey, api_base: apiBase });
+        log(`Authenticated as ${data.user.name} (${data.user.email})`);
     } catch (err) {
         if (err instanceof AuthError) {
-            fatal(`Authentication failed: invalid API key.`, EXIT.AUTH);
+            fatal("Authentication failed: invalid API key.", EXIT.AUTH);
         }
-        fatal(`Authentication failed: ${(err as Error).message}`);
+        fatalError(err);
     }
 }
 
 export async function logout(): Promise<void> {
     deleteConfig();
-    console.log("Logged out.");
+    log("Logged out.");
 }

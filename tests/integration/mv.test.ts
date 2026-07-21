@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
-import { runCli, getWorkspaceId, getClient, uploadTestFile, deleteFile } from "../helpers";
+import { LIVE_API, runCli, getWorkspaceId, getClient, uploadTestFile, deleteFile } from "../helpers";
 
-describe("dosya mv", () => {
+describe.skipIf(!LIVE_API)("dosya mv", () => {
     const apiKey = process.env.DOSYA_TEST_API_KEY!;
     let workspaceId: string;
     let fileId: string;
@@ -54,7 +54,7 @@ describe("dosya mv", () => {
         const data = JSON.parse(stdout);
         expect(data.ok).toBe(true);
         expect(data.action).toBe("move");
-        expect(data.folder_id).toBe(folderId);
+        expect(data.dest).toBe(folderId);
     });
 
     it("should fail without file ID and target", async () => {

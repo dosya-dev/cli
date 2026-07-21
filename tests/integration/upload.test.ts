@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { writeFileSync, mkdirSync, rmSync } from "fs";
 import { join } from "path";
-import { runCli, getWorkspaceId, deleteFile } from "../helpers";
+import { LIVE_API, runCli, getWorkspaceId, deleteFile } from "../helpers";
 
-describe("dosya upload", () => {
+describe.skipIf(!LIVE_API)("dosya upload", () => {
     const apiKey = process.env.DOSYA_TEST_API_KEY!;
     let workspaceId: string;
     const tmpDir = join(import.meta.dir, "../.tmp-upload-test");

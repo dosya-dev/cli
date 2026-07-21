@@ -1,6 +1,6 @@
-import { DosyaClient } from "../client";
+import { createClient } from "../client";
 import { requireAuth } from "../config";
-import { printTable, printJson, timeAgo, fatal, log, EXIT } from "../output";
+import { printTable, printJson, timeAgo, fatal, fatalError, log, EXIT } from "../output";
 import { formatBytes } from "@dosya-dev/shared";
 
 const HELP = `List files in a workspace on dosya.dev.
@@ -10,6 +10,7 @@ Usage: dosya ls [workspace_id] [flags]
 Flags:
   --workspace, -w <id>   Workspace ID (or pass as first argument)
   --folder <id>          Folder ID to list
+  --query <text>         Filter the listing by name
   --page <n>             Page number (default: 1)
   --sort <order>         Sort order (default: newest)
   --json, -j             Output as JSON
@@ -34,16 +35,16 @@ export async function ls(args: string[], flags: Record<string, string>): Promise
     if (flags.help !== undefined) { lsHelp(); return; }
 
     const { apiKey, apiBase, config } = await requireAuth(flags.key);
-    const client = new DosyaClient(apiBase, apiKey);
+    const client = createClient(apiBase, apiKey);
 
-    const workspaceId = args[0] ?? flags.workspace ?? flags.w ?? config?.default_workspace;
+    const workspaceId = args[0] || flags.workspace || config?.default_workspace;
     if (!workspaceId) {
         fatal("Workspace ID required. Usage: dosya ls <workspace_id> or set default: dosya config set default_workspace <id>", EXIT.USAGE);
     }
 
-    const folderId = args[1] ?? flags.folder ?? "";
-    const page = flags.page ?? "1";
-    const sort = flags.sort ?? "newest";
+    const folderId = args[1] || flags.folder || "";
+    const page = flags.page || "1";
+    const sort = flags.sort || "newest";
 
     try {
         // Use URLSearchParams for safe encoding
@@ -54,6 +55,7 @@ export async function ls(args: string[], flags: Record<string, string>): Promise
             sort,
         });
         if (folderId) params.set("folder_id", folderId);
+        if (flags.query) params.set("q", flags.query);
 
         const data = await client.get<FilesResponse>(`/api/files?${params}`);
 
@@ -93,6 +95,6 @@ export async function ls(args: string[], flags: Record<string, string>): Promise
             log(`\nPage ${data.pagination.page} of ${data.pagination.total_pages} (${data.pagination.total_files} files total)`);
         }
     } catch (err) {
-        fatal((err as Error).message);
+        fatalError(err);
     }
 }

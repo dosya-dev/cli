@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { runCli } from "../helpers";
+import { runCli, LIVE_API } from "../helpers";
 
 describe("dosya global flags and commands", () => {
     describe("--version / -v", () => {
@@ -82,7 +82,7 @@ describe("dosya global flags and commands", () => {
             expect(stdout).toContain("Logged out");
         });
 
-        it("should login with valid API key via --key flag", async () => {
+        it.skipIf(!LIVE_API)("should login with valid API key via --key flag", async () => {
             const apiKey = process.env.DOSYA_TEST_API_KEY!;
             const { stdout, exitCode } = await runCli([
                 "auth", "login", "--key", apiKey,

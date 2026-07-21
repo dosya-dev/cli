@@ -1,6 +1,7 @@
-import { homedir } from "os";
-import { join } from "path";
+import { dirname } from "path";
 import { existsSync, rmSync } from "fs";
+import { getConfigPath } from "../config";
+import { isCompiledBinary } from "../runtime";
 import { log, fatal, EXIT } from "../output";
 
 const HELP = `Uninstall the dosya CLI.
@@ -11,7 +12,7 @@ Flags:
   --force, -f   Skip confirmation prompt
   --help, -h    Show help
 
-This removes the dosya binary and config directory (~/.dosya/).`;
+This removes the dosya binary and its config directory.`;
 
 export function uninstallHelp(): void {
     console.log(HELP);
@@ -20,19 +21,32 @@ export function uninstallHelp(): void {
 export async function uninstall(flags: Record<string, string>): Promise<void> {
     if (flags.help !== undefined) { uninstallHelp(); return; }
 
-    const binaryPath = process.execPath;
-    const configDir = join(homedir(), ".dosya");
+    const isForce = flags.force !== undefined;
 
-    if (flags.force === undefined && flags.f === undefined) {
-        process.stdout.write("This will remove the dosya binary and config directory. Continue? [y/N] ");
+    // process.execPath is the bun interpreter when running from source —
+    // deleting it would remove the user's Bun installation.
+    const compiled = isCompiledBinary();
+    const binaryPath = compiled ? process.execPath : null;
+    const configDir = dirname(getConfigPath());
 
-        const response = await new Promise<string>((resolve) => {
-            const buf = Buffer.alloc(16);
-            const n = require("fs").readSync(0, buf, 0, buf.length, null);
-            resolve(buf.toString("utf8", 0, n).trim().toLowerCase());
-        });
+    if (!compiled) {
+        log("Running from source — only the config directory will be removed.");
+    }
 
-        if (response !== "y" && response !== "yes") {
+    if (!isForce) {
+        if (!process.stdin.isTTY) {
+            fatal("Cannot prompt for confirmation in non-interactive mode. Use --force to skip.", EXIT.USAGE);
+        }
+
+        const target = binaryPath ? `the dosya binary and ${configDir}` : configDir;
+        process.stdout.write(`This will remove ${target}. Continue? [y/N] `);
+
+        const reader = Bun.stdin.stream().getReader();
+        const { value } = await reader.read();
+        reader.releaseLock();
+        const answer = new TextDecoder().decode(value ?? new Uint8Array()).trim().toLowerCase();
+
+        if (answer !== "y" && answer !== "yes") {
             log("Cancelled.");
             return;
         }
@@ -44,7 +58,11 @@ export async function uninstall(flags: Record<string, string>): Promise<void> {
         log(`Removed ${configDir}`);
     }
 
-    // Remove the binary
+    if (!binaryPath) {
+        log("dosya config removed.");
+        return;
+    }
+
     try {
         rmSync(binaryPath, { force: true });
         log(`Removed ${binaryPath}`);

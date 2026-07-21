@@ -1,4 +1,5 @@
 import { formatBytes } from "@dosya-dev/shared";
+import { isPlain } from "./output";
 
 const BAR_WIDTH = 30;
 
@@ -47,7 +48,8 @@ export class ProgressBar {
 
         const pct = this.total > 0 ? Math.min(this.current / this.total, 1) : 0;
         const filled = Math.round(BAR_WIDTH * pct);
-        const bar = "█".repeat(filled) + "░".repeat(BAR_WIDTH - filled);
+        const [full, empty] = isPlain() ? ["#", "-"] : ["█", "░"];
+        const bar = full.repeat(filled) + empty.repeat(BAR_WIDTH - filled);
 
         const elapsed = (Date.now() - this.startTime) / 1000;
         const speed = elapsed > 0 ? this.current / elapsed : 0;
@@ -60,7 +62,16 @@ export class ProgressBar {
 
         const line = `${this.label} [${bar}] ${pctStr} | ${sizeStr} | ${speedStr} | ${timeStr}`;
         const cols = process.stderr.columns || 120;
-        process.stderr.write(`\r${line.padEnd(cols)}`);
+        // Clamp so an over-long line never wraps and leaves stale rows behind
+        const clamped = line.length > cols ? line.slice(0, cols) : line.padEnd(cols);
+        process.stderr.write(`\r${clamped}`);
+    }
+
+    /** Erase the bar — used when an interrupt or error takes over the terminal. */
+    clear(): void {
+        if (!this.isTTY) return;
+        const cols = process.stderr.columns || 120;
+        process.stderr.write(`\r${" ".repeat(cols)}\r`);
     }
 
     /**

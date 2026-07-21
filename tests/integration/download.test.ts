@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { existsSync, unlinkSync, mkdirSync, rmSync } from "fs";
 import { join } from "path";
-import { runCli, getWorkspaceId, uploadTestFile, deleteFile } from "../helpers";
+import { LIVE_API, runCli, getWorkspaceId, uploadTestFile, deleteFile } from "../helpers";
 
-describe("dosya download", () => {
+describe.skipIf(!LIVE_API)("dosya download", () => {
     const apiKey = process.env.DOSYA_TEST_API_KEY!;
     let workspaceId: string;
     let fileId: string;
@@ -62,7 +62,7 @@ describe("dosya download", () => {
         const { exitCode, stderr } = await runCli(["download", "-k", apiKey]);
 
         expect(exitCode).not.toBe(0);
-        expect(stderr).toContain("File ID required");
+        expect(stderr).toContain("File required");
     });
 
     it("should fail with invalid file ID", async () => {
