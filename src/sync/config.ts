@@ -8,10 +8,26 @@ export const DEFAULT_IGNORES = [
     ".git",
     ".DS_Store",
     "Thumbs.db",
+    ".dosyaignore",
     "*.dosya-upload",
     "*.dosya-download",
     "*.dosya-partial",
 ];
+
+/**
+ * Read a `.dosyaignore` file at the sync root, if present. One glob per line;
+ * blank lines and `#` comments are skipped. Merged with a pair's `excludes`.
+ */
+export function loadDosyaIgnore(root: string): string[] {
+    try {
+        return readFileSync(join(root, ".dosyaignore"), "utf8")
+            .split(/\r?\n/)
+            .map(l => l.trim())
+            .filter(l => l.length > 0 && !l.startsWith("#"));
+    } catch {
+        return [];
+    }
+}
 
 export function syncDir(): string {
     return join(getConfigDir(), "sync");

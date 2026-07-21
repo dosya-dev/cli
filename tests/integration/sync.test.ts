@@ -18,6 +18,13 @@ describe("dosya sync --help", () => {
         expect(exitCode).toBe(0);
         expect(stdout).toContain("No sync pairs");
     });
+
+    it("reports no background watcher when none is running", async () => {
+        const xdg = mkdtempSync(join(tmpdir(), "dosya-sync-stop-"));
+        const { stdout, exitCode } = await runCli(["sync", "stop"], { XDG_CONFIG_HOME: xdg });
+        expect(exitCode).toBe(0);
+        expect(stdout).toContain("No background sync");
+    });
 });
 
 describe.skipIf(!LIVE_API)("dosya sync (end-to-end)", () => {

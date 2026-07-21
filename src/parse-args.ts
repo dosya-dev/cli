@@ -50,6 +50,7 @@ const VALUE_FLAGS = new Set([
 
 /** Flags that take no value. */
 const BOOLEAN_FLAGS = new Set([
+    "daemon",
     "debug",
     "dry-run",
     "force",

@@ -1,6 +1,6 @@
 import { nowUnix } from "@dosya-dev/shared";
 import { DosyaClient } from "../client";
-import { compileExcludes, DEFAULT_IGNORES } from "./config";
+import { compileExcludes, DEFAULT_IGNORES, loadDosyaIgnore } from "./config";
 import { loadState, saveState } from "./state";
 import { scanLocal, type ScanResult } from "./scan";
 import { SyncRemote, buildRemotePaths } from "./remote";
@@ -39,7 +39,7 @@ export interface CycleResult {
 /** One full reconcile+apply cycle for a pair. `dryRun` plans without transferring. */
 export async function runCycle(client: DosyaClient, pair: SyncPair, dryRun: boolean): Promise<CycleResult> {
     const remote = new SyncRemote(client, pair.remoteWorkspaceId);
-    const isExcluded = compileExcludes([...DEFAULT_IGNORES, ...pair.excludes]);
+    const isExcluded = compileExcludes([...DEFAULT_IGNORES, ...pair.excludes, ...loadDosyaIgnore(pair.local)]);
 
     const scan = scanLocal(pair.local, isExcluded);
     const snap = await remote.snapshot(pair.remoteFolderId);

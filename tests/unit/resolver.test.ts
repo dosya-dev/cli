@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { parseRef, buildFolderIndex } from "../../src/resolver";
+import { parseRef, buildFolderIndex, hasGlob, globToRegExp } from "../../src/resolver";
 
 describe("parseRef", () => {
     it("passes a raw file id through", () => {
@@ -55,5 +55,22 @@ describe("buildFolderIndex", () => {
             { id: "fld_b", name: "b", parent_id: "fld_a" },
         ]);
         expect(idx.idToPath.size).toBe(2);
+    });
+});
+
+describe("glob helpers", () => {
+    it("detects wildcards", () => {
+        expect(hasGlob("*.log")).toBe(true);
+        expect(hasGlob("q?.pdf")).toBe(true);
+        expect(hasGlob("report.pdf")).toBe(false);
+    });
+
+    it("compiles a filename glob to an anchored regexp (escaping dots)", () => {
+        const re = globToRegExp("*.log");
+        expect(re.test("app.log")).toBe(true);
+        expect(re.test("app.log.bak")).toBe(false);
+        expect(re.test("applog")).toBe(false);
+        expect(globToRegExp("q?.pdf").test("q3.pdf")).toBe(true);
+        expect(globToRegExp("q?.pdf").test("q33.pdf")).toBe(false);
     });
 });

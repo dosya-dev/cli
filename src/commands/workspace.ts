@@ -1,5 +1,5 @@
 import { createClient } from "../client";
-import { requireAuth } from "../config";
+import { requireAuth, updateConfig } from "../config";
 import { printTable, printJson, fatal, fatalError, log, EXIT } from "../output";
 import { confirm } from "../prompt";
 import { formatBytes } from "@dosya-dev/shared";
@@ -8,6 +8,7 @@ const HELP = `Manage workspaces on dosya.dev.
 
 Usage:
   dosya workspace list                 List all workspaces
+  dosya workspace use <id>             Set the default workspace
   dosya workspace create --name <n>    Create a new workspace
   dosya workspace delete <id>          Delete a workspace
 
@@ -19,6 +20,7 @@ Flags:
 
 Examples:
   dosya workspace list
+  dosya workspace use ws_abc123
   dosya workspace create --name "My Project"
   dosya workspace delete ws_abc123 --force`;
 
@@ -102,6 +104,23 @@ export async function workspaceCreate(flags: Record<string, string>): Promise<vo
         log(`Created workspace: ${ws.name} (${ws.id})`);
     } catch (err) {
         fatalError(err);
+    }
+}
+
+export async function workspaceUse(args: string[], flags: Record<string, string>): Promise<void> {
+    if (flags.help !== undefined) { workspaceHelp(); return; }
+
+    const wsId = args[0] || flags.id;
+    if (!wsId) {
+        fatal("Workspace ID required. Usage: dosya workspace use <workspace_id>", EXIT.USAGE);
+    }
+
+    await updateConfig({ default_workspace: wsId });
+
+    if (flags.json !== undefined) {
+        printJson({ ok: true, default_workspace: wsId });
+    } else {
+        log(`Default workspace set to ${wsId}`);
     }
 }
 

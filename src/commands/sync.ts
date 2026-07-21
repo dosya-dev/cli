@@ -1,15 +1,74 @@
-import { resolve as resolvePath } from "path";
-import { statSync } from "fs";
+import { resolve as resolvePath, join } from "path";
+import { statSync, existsSync, mkdirSync, openSync, writeFileSync, readFileSync, unlinkSync } from "fs";
+import { spawn } from "child_process";
 import { createClient } from "../client";
 import { requireAuth } from "../config";
 import { printTable, printJson, fatal, fatalError, log, EXIT } from "../output";
+import { isCompiledBinary } from "../runtime";
 import { confirm } from "../prompt";
 import { Resolver } from "../resolver";
-import { pairId, loadSyncConfig, saveSyncConfig } from "../sync/config";
+import { pairId, loadSyncConfig, saveSyncConfig, syncDir } from "../sync/config";
 import { loadState, removeState } from "../sync/state";
 import { runCycle } from "../sync/engine";
 import { watchPair } from "../sync/watch";
 import type { SyncPair, SyncMode, ConflictStrategy, SyncAction } from "../sync/types";
+
+function daemonPaths(): { pid: string; log: string } {
+    return { pid: join(syncDir(), "watch.pid"), log: join(syncDir(), "watch.log") };
+}
+
+/** True if a background watcher is recorded and its process is alive. */
+function daemonPid(): number | null {
+    try {
+        const pid = Number(readFileSync(daemonPaths().pid, "utf8").trim());
+        if (!pid) return null;
+        process.kill(pid, 0); // throws if the process is gone
+        return pid;
+    } catch {
+        return null;
+    }
+}
+
+/** Re-spawn the CLI detached to watch in the background. */
+function startDaemon(pairArg: string | undefined, flags: Record<string, string>): void {
+    if (daemonPid()) {
+        fatal("A background sync is already running. Stop it first: dosya sync stop", EXIT.USAGE);
+    }
+    const dir = syncDir();
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const { pid: pidPath, log: logPath } = daemonPaths();
+
+    // A compiled binary IS the executable; under an interpreter, re-run the script.
+    const argv = ["sync", "watch", ...(pairArg ? [pairArg] : [])];
+    const spawnArgs = isCompiledBinary() ? argv : [process.argv[1], ...argv];
+
+    const out = openSync(logPath, "a");
+    const child = spawn(process.execPath, spawnArgs, {
+        detached: true,
+        stdio: ["ignore", out, out],
+        env: { ...process.env, ...(flags.key ? { DOSYA_API_KEY: flags.key } : {}) },
+    });
+    if (child.pid) writeFileSync(pidPath, String(child.pid), { mode: 0o600 });
+    child.unref();
+
+    log(`Watching in the background (pid ${child.pid}). Logs: ${logPath}`);
+    log("Stop it with: dosya sync stop");
+}
+
+function stopDaemon(flags: Record<string, string>): void {
+    const { pid: pidPath } = daemonPaths();
+    const pid = daemonPid();
+    if (!pid) {
+        try { unlinkSync(pidPath); } catch { /* nothing to clean up */ }
+        if (flags.json !== undefined) printJson({ ok: true, running: false });
+        else log("No background sync is running.");
+        return;
+    }
+    try { process.kill(pid); } catch { /* already gone */ }
+    try { unlinkSync(pidPath); } catch { /* ignore */ }
+    if (flags.json !== undefined) printJson({ ok: true, stopped: pid });
+    else log(`Stopped background sync (pid ${pid}).`);
+}
 
 const MODES: SyncMode[] = ["two-way", "push", "push-safe", "pull", "pull-safe"];
 const CONFLICTS: ConflictStrategy[] = ["last-write-wins", "keep-both"];
@@ -21,13 +80,18 @@ Usage:
   dosya sync list                                          List sync pairs
   dosya sync status [pair-id]                              Show pair status
   dosya sync run [pair-id] [--dry-run]                     Sync once
-  dosya sync watch [pair-id]                               Sync continuously
+  dosya sync watch [pair-id] [--daemon]                    Sync continuously (--daemon = background)
+  dosya sync stop                                          Stop the background watcher
   dosya sync remove <pair-id> [--force]                    Remove a pair
 
 Add flags:
   --mode <m>         two-way (default), push, push-safe, pull, pull-safe
   --conflict <c>     last-write-wins (default), keep-both
   --exclude <glob>   Ignore matching paths (repeatable)
+
+A .dosyaignore file at the sync root (one glob per line) is also honoured.
+With --conflict keep-both, a conflicting local file is preserved as
+"<name> (conflicted copy).<ext>" and both sides are kept.
 
 Modes:
   two-way     Mirror both directions
@@ -135,7 +199,12 @@ function syncStatus(rest: string[], flags: Record<string, string>): void {
             lastSync: s.lastFullSyncAt ? new Date(s.lastFullSyncAt * 1000).toISOString() : null,
         };
     });
-    if (flags.json !== undefined) { printJson(rows); return; }
+    const bgPid = daemonPid();
+    if (flags.json !== undefined) {
+        printJson({ pairs: rows, background: { running: bgPid !== null, pid: bgPid } });
+        return;
+    }
+    log(bgPid ? `Background sync: running (pid ${bgPid})` : "Background sync: not running");
     printTable(
         ["ID", "LOCAL", "MODE", "TRACKED", "LAST SYNC"],
         rows.map(r => [r.id, r.local, r.mode, String(r.tracked), r.lastSync ?? "never"]),
@@ -182,6 +251,12 @@ async function syncRun(rest: string[], flags: Record<string, string>): Promise<v
 }
 
 async function syncWatch(rest: string[], flags: Record<string, string>): Promise<void> {
+    // Background mode: detach and return immediately.
+    if (flags.daemon !== undefined) {
+        startDaemon(rest[0], flags);
+        return;
+    }
+
     const { apiKey, apiBase } = await requireAuth(flags.key);
     const client = createClient(apiBase, apiKey);
 
@@ -227,8 +302,9 @@ export async function sync(args: string[], flags: Record<string, string>, multi:
         case "status": return syncStatus(rest, flags);
         case "run": return syncRun(rest, flags);
         case "watch": return syncWatch(rest, flags);
+        case "stop": stopDaemon(flags); return;
         case "remove": return syncRemove(rest, flags);
         default:
-            fatal(`Unknown subcommand: sync ${sub}. Usage: dosya sync add|list|status|run|watch|remove`, EXIT.USAGE);
+            fatal(`Unknown subcommand: sync ${sub}. Usage: dosya sync add|list|status|run|watch|stop|remove`, EXIT.USAGE);
     }
 }

@@ -214,12 +214,13 @@ async function main(): Promise<void> {
             }
 
             case "workspace": {
-                const { workspaceList, workspaceCreate, workspaceDelete, workspaceHelp } = await import("./commands/workspace");
+                const { workspaceList, workspaceUse, workspaceCreate, workspaceDelete, workspaceHelp } = await import("./commands/workspace");
                 if (sub === "list") return await workspaceList(flags);
+                if (sub === "use") return await workspaceUse(rest, flags);
                 if (sub === "create") return await workspaceCreate(flags);
                 if (sub === "delete") return await workspaceDelete(rest, flags);
                 if (flags.help !== undefined || sub === undefined) { workspaceHelp(); process.exit(sub ? EXIT.USAGE : 0); }
-                console.error(`Unknown subcommand: workspace ${sub}. Usage: dosya workspace list|create|delete`);
+                console.error(`Unknown subcommand: workspace ${sub}. Usage: dosya workspace list|use|create|delete`);
                 process.exit(EXIT.USAGE);
                 break;
             }

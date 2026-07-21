@@ -1,22 +1,25 @@
-import { join } from "path";
-import { existsSync, statSync, openSync, writeSync, closeSync, ftruncateSync, readFileSync, writeFileSync, unlinkSync, renameSync } from "fs";
+import { join, dirname } from "path";
+import { existsSync, statSync, mkdirSync, openSync, writeSync, closeSync, ftruncateSync, readFileSync, writeFileSync, unlinkSync, renameSync } from "fs";
 import { formatBytes } from "@dosya-dev/shared";
 import { createClient, DosyaClient } from "../client";
-import { requireAuth } from "../config";
+import { requireAuth, type DosyaConfig } from "../config";
 import { ProgressBar } from "../progress";
 import { getLongTimeout, onInterrupt } from "../runtime";
 import { Resolver } from "../resolver";
+import { SyncRemote, buildRemotePaths } from "../sync/remote";
 import { printJson, fatal, fatalError, log, debug, EXIT } from "../output";
 
 const HELP = `Download a file from dosya.dev.
 
 Usage: dosya download <file> [flags]
+       dosya download --recursive <folder> -o ./dir/
        dosya download --zip <file...> -o out.zip
 
-<file> may be a file id or a path (folder/name, or ws_id:folder/name).
+<file>/<folder> may be an id or a path (folder/name, or ws_id:folder/name).
 
 Flags:
   --output, -o <path>       Output path (default: current directory)
+  --recursive, -r           Download a whole folder tree, preserving structure
   --zip                     Download several files as one server-built zip
   --connections, -c <num>   Parallel connections (default: 8, max: 16)
   --force, -f               Overwrite an existing file without asking
@@ -28,6 +31,7 @@ Flags:
 Examples:
   dosya download file_abc123
   dosya download reports/q3.pdf --output ./downloads/
+  dosya download --recursive reports -o ./reports-backup/
   dosya download --zip a.pdf b.pdf -o bundle.zip`;
 
 export function downloadHelp(): void {
@@ -617,6 +621,73 @@ async function downloadZip(
     }
 }
 
+/** Download a whole folder tree to disk, preserving structure. */
+async function downloadRecursive(
+    args: string[],
+    flags: Record<string, string>,
+    client: DosyaClient,
+    config: DosyaConfig | null,
+): Promise<void> {
+    const target = args[0];
+    if (!target) {
+        fatal("Folder required. Usage: dosya download --recursive <folder> -o ./dir/", EXIT.USAGE);
+    }
+    const isJson = flags.json !== undefined;
+
+    const folder = await new Resolver(client).resolve(target, {
+        workspace: flags.workspace,
+        defaultWorkspace: config?.default_workspace,
+        expect: "folder",
+    });
+
+    const outDir = flags.output && flags.output !== "-" ? flags.output : ".";
+    const remote = new SyncRemote(client, folder.workspaceId);
+    const snap = await remote.snapshot(folder.id || null);
+    const files = [...buildRemotePaths(snap.files, snap.folders, folder.id || null).values()];
+
+    if (files.length === 0) {
+        if (isJson) printJson({ ok: true, downloaded: 0 });
+        else log("No files to download.");
+        return;
+    }
+
+    let downloaded = 0;
+    const failures: { file: string; error: string }[] = [];
+    const CHUNK = 500; // download-manifest caps at 500 ids per request
+
+    for (let i = 0; i < files.length; i += CHUNK) {
+        const batch = files.slice(i, i + CHUNK);
+        const urls = await remote.downloadUrls(batch.map(f => f.id));
+        const byId = new Map(urls.map(u => [u.fileId, u]));
+        for (const f of batch) {
+            try {
+                const u = byId.get(f.id);
+                if (!u) throw new Error("no download url returned");
+                const full = join(outDir, f.relPath);
+                mkdirSync(dirname(full), { recursive: true });
+                const res = await fetch(u.url, { signal: AbortSignal.timeout(getLongTimeout(600_000)) });
+                if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+                const tmp = `${full}.dosya-partial`;
+                await Bun.write(tmp, res);
+                renameSync(tmp, full);
+                downloaded++;
+                if (!isJson && process.stderr.isTTY) process.stderr.write(`\r  ${downloaded}/${files.length} files`);
+            } catch (err) {
+                failures.push({ file: f.relPath, error: (err as Error).message });
+            }
+        }
+    }
+    if (!isJson && process.stderr.isTTY) process.stderr.write("\n");
+
+    if (isJson) {
+        printJson({ ok: failures.length === 0, downloaded, failures });
+    } else {
+        for (const fl of failures) console.error(`Failed: ${fl.file}: ${fl.error}`);
+        log(`Downloaded ${downloaded} file(s) to ${outDir}/`);
+    }
+    if (failures.length > 0) process.exit(EXIT.ERROR);
+}
+
 export async function download(args: string[], flags: Record<string, string>): Promise<void> {
     if (flags.help !== undefined) { downloadHelp(); return; }
 
@@ -624,7 +695,7 @@ export async function download(args: string[], flags: Record<string, string>): P
     const client = createClient(apiBase, apiKey);
 
     const target = args[0];
-    if (flags.zip === undefined && !target) {
+    if (flags.zip === undefined && flags.recursive === undefined && !target) {
         fatal("File required. Usage: dosya download <file>", EXIT.USAGE);
     }
 
@@ -634,6 +705,11 @@ export async function download(args: string[], flags: Record<string, string>): P
     );
 
     try {
+        // --recursive: pull a whole folder tree, preserving structure.
+        if (flags.recursive !== undefined) {
+            return await downloadRecursive(args, flags, client, config);
+        }
+
         // --zip: a single server-built zip of several files.
         if (flags.zip !== undefined) {
             return await downloadZip(args, flags, client, config?.default_workspace);

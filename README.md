@@ -53,7 +53,15 @@ dosya info file_abc123                    # raw id (always works, no lookup)
 Set a default workspace so you can drop the `ws_…:` prefix:
 
 ```bash
-dosya config set default_workspace ws_abc123
+dosya workspace use ws_abc123
+```
+
+Bulk commands (`rm`, `mv`, `star`/`unstar`, `download --zip`, `share bundle`)
+accept `*` / `?` globs in the final path segment:
+
+```bash
+dosya rm reports/*.log
+dosya download --zip photos/*.jpg -o photos.zip
 ```
 
 ### File Operations
@@ -61,6 +69,7 @@ dosya config set default_workspace ws_abc123
 ```bash
 dosya upload <file|dir>          # Upload files or directories
 dosya download <file>            # Download a file (id or path); --zip for many
+dosya download -r <folder>       # Download a whole folder tree to disk
 dosya ls [workspace_id]          # List files (--query to filter)
 dosya search <query>             # Search files, folders and shares
 dosya info <file>                # Show metadata without downloading (alias: stat)
@@ -146,7 +155,9 @@ dosya sync list                                  # List configured pairs
 dosya sync run --dry-run                         # Show what would change
 dosya sync run                                   # Sync once
 dosya sync watch                                 # Sync continuously (Ctrl+C to stop)
-dosya sync status                                # Show tracked files + last sync
+dosya sync watch --daemon                        # …or run it in the background
+dosya sync stop                                  # Stop the background watcher
+dosya sync status                                # Tracked files, last sync, daemon state
 dosya sync remove <pair-id>                      # Stop syncing (files left in place)
 ```
 
@@ -155,9 +166,13 @@ dosya sync remove <pair-id>                      # Stop syncing (files left in p
 cloud deletions) · `pull-safe` (download only, never delete locally).
 
 **Conflicts:** `--conflict last-write-wins` (default) keeps the newer side;
-`--conflict keep-both` records the conflict for you to resolve (nothing is lost).
+`--conflict keep-both` preserves the local version as `<name> (conflicted copy).<ext>`
+and pulls the remote to the original name — both sides are kept, nothing is lost.
 A safety valve suppresses deletions when the local scan is incomplete or a
 suspicious mass-delete is detected.
+
+**Ignore rules:** pass `--exclude '<glob>'` (repeatable) when adding a pair, or drop
+a `.dosyaignore` file at the sync root (one glob per line, `#` comments allowed).
 
 Transfers are whole-file and resumable; state lives in `~/.dosya/sync/`.
 
@@ -165,6 +180,7 @@ Transfers are whole-file and resumable; state lives in `~/.dosya/sync/`.
 
 ```bash
 dosya workspace list             # List workspaces
+dosya workspace use <id>         # Set the default workspace
 dosya workspace create           # Create workspace
 dosya workspace delete <id>      # Delete workspace
 ```

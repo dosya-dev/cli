@@ -1,5 +1,5 @@
 import { join, dirname, basename } from "path";
-import { mkdirSync, statSync, renameSync, rmSync } from "fs";
+import { mkdirSync, statSync, renameSync, rmSync, existsSync } from "fs";
 import { getLongTimeout } from "../runtime";
 import { debug } from "../output";
 import { SyncRemote, remoteFolderPaths, type UploadItem } from "./remote";
@@ -16,6 +16,28 @@ export interface ApplyResult {
 function parentOf(relPath: string): string {
     const i = relPath.lastIndexOf("/");
     return i === -1 ? "" : relPath.slice(0, i);
+}
+
+/** Insert a " (conflicted copy)" tag before a path's extension. */
+export function conflictedCopyName(relPath: string, tag = "conflicted copy"): string {
+    const slash = relPath.lastIndexOf("/");
+    const dir = slash === -1 ? "" : relPath.slice(0, slash + 1);
+    const base = slash === -1 ? relPath : relPath.slice(slash + 1);
+    const dot = base.lastIndexOf(".");
+    const name = dot > 0 ? base.slice(0, dot) : base;
+    const ext = dot > 0 ? base.slice(dot) : "";
+    return `${dir}${name} (${tag})${ext}`;
+}
+
+/** A conflicted-copy path under `root` that doesn't already exist. */
+function uniqueConflictPath(root: string, relPath: string): string {
+    let candidate = conflictedCopyName(relPath);
+    let n = 2;
+    while (existsSync(join(root, candidate))) {
+        candidate = conflictedCopyName(relPath, `conflicted copy ${n}`);
+        n++;
+    }
+    return join(root, candidate);
 }
 
 /**
@@ -125,6 +147,47 @@ export async function applyActions(
             }
         } catch (err) {
             failures.push({ action: "download-manifest", error: (err as Error).message });
+        }
+    }
+
+    // 3b) Conflicts (keep-both): preserve the local copy under a new name, then
+    //     pull the remote version to the original path. Both survive, and the
+    //     conflicted copy uploads on the next cycle — nothing is frozen or lost.
+    const conflictActions = actions.filter(a => a.kind === "conflict") as Extract<SyncAction, { kind: "conflict" }>[];
+    if (conflictActions.length > 0) {
+        const pull: { remoteId: string; relPath: string }[] = [];
+        for (const a of conflictActions) {
+            try {
+                const orig = join(root, a.relPath);
+                if (existsSync(orig)) {
+                    renameSync(orig, uniqueConflictPath(root, a.relPath));
+                }
+                pull.push({ remoteId: a.remoteId, relPath: a.relPath });
+            } catch (err) {
+                failures.push({ action: `conflict ${a.relPath}`, error: (err as Error).message });
+            }
+        }
+        try {
+            const urls = await remote.downloadUrls(pull.map(p => p.remoteId));
+            const byId = new Map(urls.map(u => [u.fileId, u]));
+            for (const p of pull) {
+                try {
+                    const u = byId.get(p.remoteId);
+                    if (!u) throw new Error("no download url returned");
+                    const full = join(root, p.relPath);
+                    mkdirSync(dirname(full), { recursive: true });
+                    const res = await fetch(u.url, { signal: AbortSignal.timeout(getLongTimeout(600_000)) });
+                    if (!res.ok || !res.body) throw new Error(`download HTTP ${res.status}`);
+                    const tmp = `${full}.dosya-partial`;
+                    await Bun.write(tmp, res);
+                    renameSync(tmp, full);
+                    applied++;
+                } catch (err) {
+                    failures.push({ action: `conflict-download ${p.relPath}`, error: (err as Error).message });
+                }
+            }
+        } catch (err) {
+            failures.push({ action: "conflict-download-manifest", error: (err as Error).message });
         }
     }
 

@@ -40,6 +40,22 @@ export class ResolveError extends Error {
 const ID_RE = /^(file|fld|ws)_[A-Za-z0-9]+$/;
 const WS_RE = /^ws_[A-Za-z0-9]+$/;
 
+/** True if a path segment contains a `*` or `?` wildcard. */
+export function hasGlob(segment: string): boolean {
+    return /[*?]/.test(segment);
+}
+
+/** Compile a single-segment glob (`*`, `?`) to an anchored RegExp. */
+export function globToRegExp(glob: string): RegExp {
+    let re = "";
+    for (const c of glob) {
+        if (c === "*") re += "[^/]*";
+        else if (c === "?") re += "[^/]";
+        else re += c.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+    }
+    return new RegExp(`^${re}$`);
+}
+
 export interface ParsedRef {
     workspaceId: string | null;
     segments: string[];
@@ -202,12 +218,69 @@ export class Resolver {
         throw new ResolveError(`No such file or folder: "${fullPath}" in workspace ${workspaceId}.`);
     }
 
+    /**
+     * Expand a single reference, applying a leaf glob (`*`/`?`) if present.
+     * A non-glob reference returns exactly one result; a glob returns every
+     * matching file and folder in the parent, and errors if nothing matches.
+     */
+    async expand(
+        ref: string,
+        opts: { workspace?: string; defaultWorkspace?: string; expect?: RefType },
+    ): Promise<Resolved[]> {
+        const parsed = parseRef(ref, opts);
+        const leaf = parsed.segments[parsed.segments.length - 1] ?? "";
+        if (parsed.rawId || !hasGlob(leaf)) {
+            return [await this.resolve(ref, opts)];
+        }
+
+        const workspaceId = parsed.workspaceId;
+        if (!workspaceId) {
+            throw new ResolveError(`No workspace for "${ref}". Use ws_id:path, --workspace <id>, or set a default workspace.`);
+        }
+
+        const idx = await this.tree(workspaceId);
+        const parentSegs = parsed.segments.slice(0, -1);
+        let parentId: string | null = null;
+        if (parentSegs.length > 0) {
+            const pid = idx.pathToId.get(parentSegs.join("/"));
+            if (!pid) throw new ResolveError(`No such folder: "${parentSegs.join("/")}" in workspace ${workspaceId}.`);
+            parentId = pid;
+        }
+
+        const re = globToRegExp(leaf);
+        const results: Resolved[] = [];
+
+        // Matching subfolders directly under the parent.
+        if (opts.expect !== "file") {
+            for (const node of idx.byId.values()) {
+                if ((node.parent_id ?? null) === parentId && re.test(node.name)) {
+                    results.push({ type: "folder", id: node.id, workspaceId, name: node.name });
+                }
+            }
+        }
+
+        // Matching files in the parent folder.
+        if (opts.expect !== "folder") {
+            const params = new URLSearchParams({ workspace_id: workspaceId, per_page: "500" });
+            if (parentId) params.set("folder_id", parentId);
+            const listing = await this.client.get<{ ok: boolean; files: { id: string; name: string }[] }>(`/api/files?${params}`);
+            for (const f of listing.files ?? []) {
+                if (re.test(f.name)) results.push({ type: "file", id: f.id, workspaceId, name: f.name });
+            }
+        }
+
+        if (results.length === 0) {
+            throw new ResolveError(`No files or folders match "${ref}".`);
+        }
+        return results;
+    }
+
     async resolveMany(
         refs: string[],
         opts: { workspace?: string; defaultWorkspace?: string; expect?: RefType },
     ): Promise<Resolved[]> {
         const out: Resolved[] = [];
-        for (const ref of refs) out.push(await this.resolve(ref, opts));
+        for (const ref of refs) out.push(...(await this.expand(ref, opts)));
         return out;
     }
 }

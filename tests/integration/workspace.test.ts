@@ -1,5 +1,20 @@
 import { describe, it, expect, afterAll } from "bun:test";
+import { join } from "path";
+import { mkdtempSync } from "fs";
+import { tmpdir } from "os";
 import { LIVE_API, runCli, getClient } from "../helpers";
+
+describe("dosya workspace use (no API)", () => {
+    it("sets the default workspace in the config", async () => {
+        const xdg = mkdtempSync(join(tmpdir(), "dosya-ws-use-"));
+        const set = await runCli(["workspace", "use", "ws_test123"], { XDG_CONFIG_HOME: xdg });
+        expect(set.exitCode).toBe(0);
+        expect(set.stdout).toContain("ws_test123");
+
+        const get = await runCli(["config", "get", "default_workspace"], { XDG_CONFIG_HOME: xdg });
+        expect(get.stdout.trim()).toBe("ws_test123");
+    });
+});
 
 describe.skipIf(!LIVE_API)("dosya workspace", () => {
     const apiKey = process.env.DOSYA_TEST_API_KEY!;

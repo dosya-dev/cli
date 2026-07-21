@@ -59,11 +59,11 @@ _dosya_completions() {
             return 0
             ;;
         sync)
-            COMPREPLY=( $(compgen -W "add list status run watch remove --mode --conflict --exclude --dry-run --force -f --workspace -w --json -j --help" -- "$cur") )
+            COMPREPLY=( $(compgen -W "add list status run watch stop remove --mode --conflict --exclude --dry-run --daemon --force -f --workspace -w --json -j --help" -- "$cur") )
             return 0
             ;;
         download)
-            COMPREPLY=( $(compgen -W "--output -o --zip --connections -c --force -f --workspace -w --key -k --json -j --help" -- "$cur") )
+            COMPREPLY=( $(compgen -W "--output -o --recursive -r --zip --connections -c --force -f --workspace -w --key -k --json -j --help" -- "$cur") )
             return 0
             ;;
         ls)
@@ -84,7 +84,7 @@ _dosya_completions() {
             ;;
         workspace)
             if [[ "\${COMP_WORDS[2]}" == "" ]] || [[ $COMP_CWORD -eq 2 ]]; then
-                COMPREPLY=( $(compgen -W "list create delete --help" -- "$cur") )
+                COMPREPLY=( $(compgen -W "list use create delete --help" -- "$cur") )
             else
                 case "\${COMP_WORDS[2]}" in
                     create) COMPREPLY=( $(compgen -W "--name --json -j --help" -- "$cur") ) ;;
@@ -211,6 +211,8 @@ _dosya() {
                     _arguments \\
                         '--output[Output path]:path:_files' \\
                         '-o[Output path]:path:_files' \\
+                        '--recursive[Download a whole folder tree]' \\
+                        '-r[Download a whole folder tree]' \\
                         '--zip[Download several files as a zip]' \\
                         '--connections[Parallel connections]:count' \\
                         '-c[Parallel connections]:count' \\
@@ -253,11 +255,12 @@ _dosya() {
                     ;;
                 sync)
                     _arguments \\
-                        '1:subcommand:(add list status run watch remove)' \\
+                        '1:subcommand:(add list status run watch stop remove)' \\
                         '--mode[Sync mode]:mode:(two-way push push-safe pull pull-safe)' \\
                         '--conflict[Conflict strategy]:strategy:(last-write-wins keep-both)' \\
                         '--exclude[Ignore glob]:glob' \\
                         '--dry-run[Plan without transferring]' \\
+                        '--daemon[Run in the background]' \\
                         '--force[Skip confirmation]' \\
                         '--json[Output as JSON]'
                     ;;
@@ -294,7 +297,7 @@ _dosya() {
                         '2:target'
                     ;;
                 workspace)
-                    _arguments '1:subcommand:(list create delete)' \\
+                    _arguments '1:subcommand:(list use create delete)' \\
                         '--name[Workspace name]:name' \\
                         '--force[Skip confirmation]' \\
                         '-f[Skip confirmation]' \\
@@ -404,9 +407,10 @@ complete -c dosya -n '__fish_seen_subcommand_from rm' -l permanent -d 'Permanent
 complete -c dosya -n '__fish_seen_subcommand_from rm' -l force -s f -d 'Skip confirmation'
 
 # workspace subcommands
-complete -c dosya -n '__fish_seen_subcommand_from workspace; and not __fish_seen_subcommand_from list create delete' -a 'list' -d 'List workspaces'
-complete -c dosya -n '__fish_seen_subcommand_from workspace; and not __fish_seen_subcommand_from list create delete' -a 'create' -d 'Create workspace'
-complete -c dosya -n '__fish_seen_subcommand_from workspace; and not __fish_seen_subcommand_from list create delete' -a 'delete' -d 'Delete workspace'
+complete -c dosya -n '__fish_seen_subcommand_from workspace; and not __fish_seen_subcommand_from list use create delete' -a 'list' -d 'List workspaces'
+complete -c dosya -n '__fish_seen_subcommand_from workspace; and not __fish_seen_subcommand_from list use create delete' -a 'use' -d 'Set the default workspace'
+complete -c dosya -n '__fish_seen_subcommand_from workspace; and not __fish_seen_subcommand_from list use create delete' -a 'create' -d 'Create workspace'
+complete -c dosya -n '__fish_seen_subcommand_from workspace; and not __fish_seen_subcommand_from list use create delete' -a 'delete' -d 'Delete workspace'
 complete -c dosya -n '__fish_seen_subcommand_from workspace; and __fish_seen_subcommand_from create' -l name -x -d 'Workspace name'
 complete -c dosya -n '__fish_seen_subcommand_from workspace; and __fish_seen_subcommand_from delete' -l force -s f -d 'Skip confirmation'
 
@@ -431,18 +435,20 @@ complete -c dosya -n '__fish_seen_subcommand_from search' -l workspace -s w -x -
 complete -c dosya -n '__fish_seen_subcommand_from search' -l type -x -a 'documents images videos' -d 'Filter kind'
 
 # sync subcommands + flags
-complete -c dosya -n '__fish_seen_subcommand_from sync; and not __fish_seen_subcommand_from add list status run watch remove' -a 'add list status run watch remove' -d 'Sync action'
+complete -c dosya -n '__fish_seen_subcommand_from sync; and not __fish_seen_subcommand_from add list status run watch stop remove' -a 'add list status run watch stop remove' -d 'Sync action'
 complete -c dosya -n '__fish_seen_subcommand_from sync' -l mode -x -a 'two-way push push-safe pull pull-safe' -d 'Sync mode'
 complete -c dosya -n '__fish_seen_subcommand_from sync' -l conflict -x -a 'last-write-wins keep-both' -d 'Conflict strategy'
 complete -c dosya -n '__fish_seen_subcommand_from sync' -l exclude -x -d 'Ignore glob'
 complete -c dosya -n '__fish_seen_subcommand_from sync' -l dry-run -d 'Plan without transferring'
+complete -c dosya -n '__fish_seen_subcommand_from sync' -l daemon -d 'Run in the background'
 
 # trash / versions subcommands
 complete -c dosya -n '__fish_seen_subcommand_from trash; and not __fish_seen_subcommand_from list restore empty' -a 'list restore empty' -d 'Trash action'
 complete -c dosya -n '__fish_seen_subcommand_from versions; and not __fish_seen_subcommand_from restore' -a 'restore' -d 'Restore a version'
 
-# download --zip
+# download --zip / --recursive
 complete -c dosya -n '__fish_seen_subcommand_from download' -l zip -d 'Download several files as a zip'
+complete -c dosya -n '__fish_seen_subcommand_from download' -l recursive -s r -d 'Download a whole folder tree'
 
 # ls --query
 complete -c dosya -n '__fish_seen_subcommand_from ls' -l query -x -d 'Filter by name'
