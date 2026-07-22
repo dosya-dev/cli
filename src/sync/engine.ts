@@ -66,6 +66,15 @@ export async function runCycle(
         return { plan: actions, applied: 0, conflicts: actions.filter(a => a.kind === "conflict").length, failures: [] };
     }
 
+    // No actions → local and remote already agree. Persist state from the scan
+    // and snapshot we already have and skip the finalize re-scan + re-snapshot
+    // entirely — this is the common steady-state (e.g. a cron re-run of an
+    // unchanged tree), where re-fetching a full paginated snapshot is pure waste.
+    if (actions.length === 0) {
+        saveState(buildState(pair.id, scan, remoteById));
+        return { plan: actions, applied: 0, conflicts: 0, failures: [] };
+    }
+
     onProgress?.({
         kind: "plan",
         uploads: actions.filter(a => a.kind === "upload-new" || a.kind === "upload-update").length,

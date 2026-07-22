@@ -82,6 +82,14 @@ describe("sync end-to-end (complex folders, no network)", () => {
         expect(res.applied).toBe(0);
     });
 
+    it("a no-op cycle fetches the snapshot once, not twice", async () => {
+        // A settled tree has 0 actions → the finalize re-snapshot is skipped.
+        api.counts.snapshot = 0;
+        const res = await runCycle(client, pair, false);
+        expect(res.applied).toBe(0);
+        expect(api.counts.snapshot).toBe(1);
+    });
+
     it("pulls a new remote file into the right nested local path", async () => {
         api.addRemoteFile("incoming/reports/q3.txt", "from cloud");
         const res = await runCycle(client, pair, false);

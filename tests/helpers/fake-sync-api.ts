@@ -29,6 +29,8 @@ export interface FakeSyncApi {
     files: Map<string, FakeFile>;
     folders: Map<string, FakeFolder>;
     objects: Map<string, Uint8Array>;   // fileId -> bytes
+    /** Per-endpoint request counters (e.g. how many snapshot fetches a cycle made). */
+    counts: { snapshot: number };
     /** Reconstruct remote relPaths (root-relative) for every file. */
     paths: () => Map<string, string>;   // relPath -> fileId
     /** Test helper: put a file directly into the remote (simulates a web upload). */
@@ -44,6 +46,7 @@ export function startFakeSyncApi(): FakeSyncApi {
     let clock = 1000;
     let seq = 0;
     const id = (p: string) => `${p}${++seq}`;
+    const counts = { snapshot: 0 };
 
     function folderPath(fid: string | null): string {
         if (!fid) return "";
@@ -109,6 +112,7 @@ export function startFakeSyncApi(): FakeSyncApi {
 
             // ── Snapshot ──
             if (method === "GET" && path === "/api/sync/snapshot") {
+                counts.snapshot++;
                 return json({
                     ok: true,
                     files: [...files.values()].map(f => ({
@@ -227,7 +231,7 @@ export function startFakeSyncApi(): FakeSyncApi {
                 handle(new Request(input as RequestInfo, init))) as typeof fetch;
         },
         stop: () => { globalThis.fetch = realFetch; },
-        files, folders, objects, paths,
+        files, folders, objects, counts, paths,
         addRemoteFile(relPath: string, body: string) {
             const slash = relPath.lastIndexOf("/");
             const folderId = slash === -1 ? null : ensureFolderPath(relPath.slice(0, slash));
