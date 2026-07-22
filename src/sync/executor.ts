@@ -5,7 +5,7 @@ import { loadConfig } from "../config";
 import { debug } from "../output";
 import { SyncRemote, remoteFolderPaths, type UploadItem } from "./remote";
 import { DELTA_MAX_BYTES } from "./chunker";
-import type { SyncAction, SyncPair } from "./types";
+import type { SyncAction, SyncPair, SyncProgressFn } from "./types";
 import type { FolderNode } from "../resolver";
 
 export interface ApplyResult {
@@ -80,6 +80,7 @@ export async function applyActions(
     pair: SyncPair,
     actions: SyncAction[],
     folders: FolderNode[],
+    onProgress?: SyncProgressFn,
 ): Promise<ApplyResult> {
     const failures: { action: string; error: string }[] = [];
     let applied = 0;
@@ -88,6 +89,17 @@ export async function applyActions(
     const folderCache = new Map<string, string>(remoteFolderPaths(folders, pair.remoteFolderId));
     // Block-level delta upload is opt-in (config `sync_delta`) and capped.
     const deltaEnabled = (await loadConfig())?.sync_delta === "true";
+
+    // Running totals for progress. Uploads = new files + changed-file versions;
+    // downloads = new/updated pulls + keep-both conflict pulls.
+    const uploadTotal =
+        actions.filter(a => a.kind === "upload-new" || a.kind === "upload-update").length;
+    const downloadTotal =
+        actions.filter(a => a.kind === "download-new" || a.kind === "download-update" || a.kind === "conflict").length;
+    let upDone = 0;
+    let downDone = 0;
+    const reportUp = () => onProgress?.({ kind: "upload", done: upDone, total: uploadTotal });
+    const reportDown = () => onProgress?.({ kind: "download", done: downDone, total: downloadTotal });
 
     // 1) New uploads — resolve/create parent folders, then manifest→PUT→commit.
     const uploadItems: UploadItem[] = [];
@@ -104,7 +116,10 @@ export async function applyActions(
     }
     if (uploadItems.length > 0) {
         try {
-            const n = await remote.uploadNew(uploadItems);
+            // Each PUT bumps the running upload count so a big first push shows
+            // live movement. uploadNew reports 0..uploadItems.length; offset by
+            // any upload-update files handled below (they run after, from 0).
+            const n = await remote.uploadNew(uploadItems, done => { upDone = done; reportUp(); });
             applied += n;
             debug(`sync: uploaded ${n} new file(s)`);
         } catch (err) {
@@ -127,6 +142,7 @@ export async function applyActions(
                 await remote.uploadVersion(full, name, size, mime, a.remoteId!, folderId);
             }
             applied++;
+            upDone++; reportUp();
         } catch (err) {
             failures.push({ action: `upload-update ${a.relPath}`, error: (err as Error).message });
         }
@@ -153,6 +169,7 @@ export async function applyActions(
                     await Bun.write(tmp, res);
                     renameSync(tmp, full);
                     applied++;
+                    downDone++; reportDown();
                 } catch (err) {
                     failures.push({ action: `download ${a.relPath}`, error: (err as Error).message });
                 }
@@ -195,6 +212,7 @@ export async function applyActions(
                     await Bun.write(tmp, res);
                     renameSync(tmp, full);
                     applied++;
+                    downDone++; reportDown();
                 } catch (err) {
                     failures.push({ action: `conflict-download ${p.relPath}`, error: (err as Error).message });
                 }

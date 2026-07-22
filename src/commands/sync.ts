@@ -3,13 +3,14 @@ import { statSync, existsSync, mkdirSync, openSync, writeFileSync, readFileSync,
 import { spawn } from "child_process";
 import { createClient } from "../client";
 import { requireAuth } from "../config";
-import { printTable, printJson, fatal, fatalError, log, EXIT } from "../output";
+import { printTable, printJson, fatal, fatalError, log, progressEnd, EXIT } from "../output";
 import { isCompiledBinary } from "../runtime";
 import { confirm } from "../prompt";
 import { Resolver } from "../resolver";
 import { pairId, loadSyncConfig, saveSyncConfig, syncDir } from "../sync/config";
 import { loadState, removeState } from "../sync/state";
 import { runCycle } from "../sync/engine";
+import { makeSyncReporter } from "../sync/progress";
 import { watchPair } from "../sync/watch";
 import type { SyncPair, SyncMode, ConflictStrategy, SyncAction } from "../sync/types";
 
@@ -226,7 +227,10 @@ async function syncRun(rest: string[], flags: Record<string, string>): Promise<v
     const summary: unknown[] = [];
     try {
         for (const p of pairs) {
-            const res = await runCycle(client, p, dryRun);
+            // Live progress only for an interactive, human (non-JSON, non-dry) run.
+            const reporter = !dryRun && flags.json === undefined ? makeSyncReporter(p.id) : undefined;
+            const res = await runCycle(client, p, dryRun, reporter);
+            progressEnd(); // close the in-place line before printing the summary
             if (dryRun) {
                 if (flags.json === undefined) {
                     log(`[${p.id}] plan: ${res.plan.length} action(s)`);

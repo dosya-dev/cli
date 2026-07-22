@@ -41,6 +41,35 @@ export function debug(message: string): void {
     if (debugMode) console.error(`[debug] ${message}`);
 }
 
+// ── Live single-line progress (stderr) ──────────────────────────────
+//
+// Written to stderr so it never corrupts `--json` (stdout) and can be
+// redirected independently. On a TTY it rewrites one line in place; when
+// piped (e.g. the sync daemon's log file) callers should emit discrete
+// milestone lines instead — `progress()` no-ops there so logs stay clean.
+
+let lastProgressWidth = 0;
+
+/** True when stderr is an interactive terminal we can redraw in place. */
+export function progressInteractive(): boolean {
+    return !quietMode && !!process.stderr.isTTY;
+}
+
+/** Redraw the progress line in place (TTY only; no-op otherwise). */
+export function progress(message: string): void {
+    if (!progressInteractive()) return;
+    const width = displayWidth(message);
+    const pad = width < lastProgressWidth ? " ".repeat(lastProgressWidth - width) : "";
+    process.stderr.write(`\r${message}${pad}`);
+    lastProgressWidth = width;
+}
+
+/** Finish the in-place progress line with a newline (TTY only). */
+export function progressEnd(): void {
+    if (progressInteractive() && lastProgressWidth > 0) process.stderr.write("\n");
+    lastProgressWidth = 0;
+}
+
 /**
  * Terminal column width of a single code point.
  *

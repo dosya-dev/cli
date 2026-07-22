@@ -50,6 +50,21 @@ export interface RemoteFile {
     relPath: string;
 }
 
+/**
+ * Live progress events emitted during a cycle so the CLI can show what a long
+ * `sync run` is doing (a big first push of thousands of files can take minutes).
+ * All handlers are best-effort — never let a reporter throw abort a transfer.
+ */
+export type SyncProgress =
+    | { kind: "scan" }
+    | { kind: "snapshot" }
+    | { kind: "plan"; uploads: number; downloads: number; deletes: number }
+    | { kind: "upload"; done: number; total: number }
+    | { kind: "download"; done: number; total: number }
+    | { kind: "finalize" };
+
+export type SyncProgressFn = (ev: SyncProgress) => void;
+
 export type SyncAction =
     | { kind: "upload-new" | "upload-update"; relPath: string; localPath: string; folderId: string | null; remoteId?: string }
     | { kind: "download-new" | "download-update"; relPath: string; remoteId: string; localPath: string }

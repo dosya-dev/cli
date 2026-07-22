@@ -5,6 +5,7 @@ import { tmpdir } from "os";
 import { DosyaClient } from "../../src/client";
 import { runCycle } from "../../src/sync/engine";
 import type { SyncPair } from "../../src/sync/types";
+import type { SyncProgress } from "../../src/sync/types";
 import { startFakeSyncApi, type FakeSyncApi } from "../helpers/fake-sync-api";
 
 /**
@@ -127,9 +128,15 @@ describe("sync large trees (server batch caps)", () => {
                 id: "p_big_push", local: root, remoteWorkspaceId: "ws_test", remoteFolderId: null,
                 syncMode: "push", conflictStrategy: "last-write-wins", excludes: [], pollIntervalMs: 15000,
             };
-            const res = await runCycle(client, pair, false);
+            const events: SyncProgress[] = [];
+            const res = await runCycle(client, pair, false, ev => events.push(ev));
             expect(res.failures).toEqual([]);
             expect(api.files.size).toBe(N);
+            // Progress fired and counted every file up to the full total.
+            const uploads = events.filter(e => e.kind === "upload") as Extract<SyncProgress, { kind: "upload" }>[];
+            expect(uploads.length).toBe(N);
+            expect(uploads.at(-1)).toEqual({ kind: "upload", done: N, total: N });
+            expect(events.some(e => e.kind === "plan")).toBe(true);
         } finally {
             api.stop();
             rmSync(root, { recursive: true, force: true });

@@ -6,7 +6,7 @@ import { scanLocal, type ScanResult } from "./scan";
 import { SyncRemote, buildRemotePaths } from "./remote";
 import { reconcile } from "./reconcile";
 import { applyActions } from "./executor";
-import type { SyncPair, SyncPairState, SyncFileRecord, RemoteFile, SyncAction } from "./types";
+import type { SyncPair, SyncPairState, SyncFileRecord, RemoteFile, SyncAction, SyncProgressFn } from "./types";
 
 /**
  * Rebuild the "last synced" snapshot from the post-cycle local + remote state:
@@ -37,11 +37,18 @@ export interface CycleResult {
 }
 
 /** One full reconcile+apply cycle for a pair. `dryRun` plans without transferring. */
-export async function runCycle(client: DosyaClient, pair: SyncPair, dryRun: boolean): Promise<CycleResult> {
+export async function runCycle(
+    client: DosyaClient,
+    pair: SyncPair,
+    dryRun: boolean,
+    onProgress?: SyncProgressFn,
+): Promise<CycleResult> {
     const remote = new SyncRemote(client, pair.remoteWorkspaceId);
     const isExcluded = compileExcludes([...DEFAULT_IGNORES, ...pair.excludes, ...loadDosyaIgnore(pair.local)]);
 
+    onProgress?.({ kind: "scan" });
     const scan = scanLocal(pair.local, isExcluded);
+    onProgress?.({ kind: "snapshot" });
     const snap = await remote.snapshot(pair.remoteFolderId);
     const remoteById = buildRemotePaths(snap.files, snap.folders, pair.remoteFolderId);
     const state = loadState(pair.id);
@@ -59,7 +66,16 @@ export async function runCycle(client: DosyaClient, pair: SyncPair, dryRun: bool
         return { plan: actions, applied: 0, conflicts: actions.filter(a => a.kind === "conflict").length, failures: [] };
     }
 
-    const result = await applyActions(remote, pair, actions, snap.folders);
+    onProgress?.({
+        kind: "plan",
+        uploads: actions.filter(a => a.kind === "upload-new" || a.kind === "upload-update").length,
+        downloads: actions.filter(a => a.kind === "download-new" || a.kind === "download-update" || a.kind === "conflict").length,
+        deletes: actions.filter(a => a.kind === "delete-local" || a.kind === "delete-remote").length,
+    });
+
+    const result = await applyActions(remote, pair, actions, snap.folders, onProgress);
+
+    onProgress?.({ kind: "finalize" });
 
     // Re-scan + re-snapshot so the persisted state reflects reality (commit is
     // INSERT-only and doesn't return updated_at/version, so we must re-read).
