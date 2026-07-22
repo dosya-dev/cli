@@ -47,7 +47,7 @@ export async function runCycle(
     const isExcluded = compileExcludes([...DEFAULT_IGNORES, ...pair.excludes, ...loadDosyaIgnore(pair.local)]);
 
     onProgress?.({ kind: "scan" });
-    const scan = scanLocal(pair.local, isExcluded);
+    const scan = await scanLocal(pair.local, isExcluded);
     onProgress?.({ kind: "snapshot" });
     const snap = await remote.snapshot(pair.remoteFolderId);
     const remoteById = buildRemotePaths(snap.files, snap.folders, pair.remoteFolderId);
@@ -88,7 +88,7 @@ export async function runCycle(
 
     // Re-scan + re-snapshot so the persisted state reflects reality (commit is
     // INSERT-only and doesn't return updated_at/version, so we must re-read).
-    const scan2 = scanLocal(pair.local, isExcluded);
+    const scan2 = await scanLocal(pair.local, isExcluded);
     const snap2 = await remote.snapshot(pair.remoteFolderId);
     const remoteById2 = buildRemotePaths(snap2.files, snap2.folders, pair.remoteFolderId);
     saveState(buildState(pair.id, scan2, remoteById2));
