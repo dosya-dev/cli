@@ -135,7 +135,15 @@ describe("sync large trees (server batch caps)", () => {
             // Progress fired and counted every file up to the full total.
             const uploads = events.filter(e => e.kind === "upload") as Extract<SyncProgress, { kind: "upload" }>[];
             expect(uploads.length).toBe(N);
-            expect(uploads.at(-1)).toEqual({ kind: "upload", done: N, total: N });
+            const last = uploads.at(-1)!;
+            expect(last.done).toBe(N);
+            expect(last.total).toBe(N);
+            // Byte accounting: the final event's bytes equals the total, which is
+            // the true sum of file sizes on disk.
+            let expectedBytes = 0;
+            for (let i = 0; i < N; i++) expectedBytes += Buffer.byteLength(`body ${i}`);
+            expect(last.totalBytes).toBe(expectedBytes);
+            expect(last.bytes).toBe(expectedBytes);
             expect(events.some(e => e.kind === "plan")).toBe(true);
         } finally {
             api.stop();

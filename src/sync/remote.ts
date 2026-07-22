@@ -135,10 +135,11 @@ export class SyncRemote {
 
     /**
      * Upload brand-new files via manifest → presigned PUT → commit, batched.
-     * `onProgress(done)` fires after each file's PUT with the running count so a
-     * long first push shows live movement instead of one summary at the end.
+     * `onProgress(done, bytes)` fires after each file's PUT with the running
+     * file count and that file's size, so a long push shows live movement and a
+     * byte-based ETA instead of one summary at the end.
      */
-    async uploadNew(items: UploadItem[], onProgress?: (done: number) => void): Promise<number> {
+    async uploadNew(items: UploadItem[], onProgress?: (done: number, bytes: number) => void): Promise<number> {
         if (items.length === 0) return 0;
         const region = await this.getRegion();
 
@@ -182,7 +183,7 @@ export class SyncRemote {
                 });
                 if (!res.ok) throw new Error(`R2 PUT failed for ${u.name}: HTTP ${res.status}`);
                 commitFiles.push({ file_id: u.fileId, r2_key: u.r2Key, name: u.name, size: u.size, folder_id: u.folderId, content_type: u.contentType, ext: u.ext });
-                onProgress?.(++putDone);
+                onProgress?.(++putDone, item.size);
             }
 
             if (commitFiles.length > 0) {

@@ -31,14 +31,14 @@ function resolveBothChanged(
         return { kind: "upload-update", relPath: path, localPath: path, folderId: null, remoteId };
     }
     if (mode === "pull" || mode === "pull-safe") {
-        return { kind: "download-update", relPath: path, remoteId, localPath: path };
+        return { kind: "download-update", relPath: path, remoteId, localPath: path, size: remote.size };
     }
     if (strategy === "keep-both") {
-        return { kind: "conflict", relPath: path, remoteId, localMtimeMs: local.mtimeMs, remoteUpdatedAt: remote.updatedAt };
+        return { kind: "conflict", relPath: path, remoteId, localMtimeMs: local.mtimeMs, remoteUpdatedAt: remote.updatedAt, remoteSize: remote.size };
     }
     // last-write-wins: the newer side wins (remote seconds vs local ms→s).
     return remote.updatedAt >= Math.floor(local.mtimeMs / 1000)
-        ? { kind: "download-update", relPath: path, remoteId, localPath: path }
+        ? { kind: "download-update", relPath: path, remoteId, localPath: path, size: remote.size }
         : { kind: "upload-update", relPath: path, localPath: path, folderId: null, remoteId };
 }
 
@@ -86,7 +86,7 @@ export function reconcile(input: ReconcileInput): SyncAction[] {
                 actions.push({ kind: "move-local", fromPath: oldPath, toPath: remote.relPath, remoteId });
             } else if (!localAtOld && !localFiles.has(remote.relPath)) {
                 // local gone entirely — pull it back at the new path
-                actions.push({ kind: "download-new", relPath: remote.relPath, remoteId, localPath: remote.relPath });
+                actions.push({ kind: "download-new", relPath: remote.relPath, remoteId, localPath: remote.relPath, size: remote.size });
             }
             processedPaths.add(oldPath);
             processedPaths.add(remote.relPath);
@@ -100,7 +100,7 @@ export function reconcile(input: ReconcileInput): SyncAction[] {
             if (rC && lC) {
                 actions.push(resolveBothChanged(oldPath, remoteId, remote, local, mode, conflictStrategy));
             } else if (rC) {
-                actions.push({ kind: "download-update", relPath: oldPath, remoteId, localPath: oldPath });
+                actions.push({ kind: "download-update", relPath: oldPath, remoteId, localPath: oldPath, size: remote.size });
             } else if (lC) {
                 actions.push({ kind: "upload-update", relPath: oldPath, localPath: oldPath, folderId: null, remoteId });
             }
@@ -108,7 +108,7 @@ export function reconcile(input: ReconcileInput): SyncAction[] {
         } else if (remote && !local) {
             // Local deleted since last sync.
             if (remoteChanged(remote, rec)) {
-                actions.push({ kind: "download-new", relPath: remote.relPath, remoteId, localPath: remote.relPath });
+                actions.push({ kind: "download-new", relPath: remote.relPath, remoteId, localPath: remote.relPath, size: remote.size });
             } else {
                 actions.push({ kind: "delete-remote", remoteId, relPath: oldPath });
             }
@@ -143,7 +143,7 @@ export function reconcile(input: ReconcileInput): SyncAction[] {
     // 3) Untracked remote files.
     for (const r of input.remote.values()) {
         if (processedRemoteIds.has(r.id) || processedPaths.has(r.relPath)) continue;
-        actions.push({ kind: "download-new", relPath: r.relPath, remoteId: r.id, localPath: r.relPath });
+        actions.push({ kind: "download-new", relPath: r.relPath, remoteId: r.id, localPath: r.relPath, size: r.size });
         processedRemoteIds.add(r.id);
     }
 

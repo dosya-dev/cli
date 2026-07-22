@@ -91,15 +91,22 @@ export async function applyActions(
     const deltaEnabled = (await loadConfig())?.sync_delta === "true";
 
     // Running totals for progress. Uploads = new files + changed-file versions;
-    // downloads = new/updated pulls + keep-both conflict pulls.
+    // downloads = new/updated pulls + keep-both conflict pulls. Byte totals feed
+    // the "1.2 GB / 3.4 GB · rate · ETA" readout; download sizes come from the
+    // remote snapshot (on the actions), upload sizes are statted just below.
     const uploadTotal =
         actions.filter(a => a.kind === "upload-new" || a.kind === "upload-update").length;
     const downloadTotal =
         actions.filter(a => a.kind === "download-new" || a.kind === "download-update" || a.kind === "conflict").length;
-    let upDone = 0;
-    let downDone = 0;
-    const reportUp = () => onProgress?.({ kind: "upload", done: upDone, total: uploadTotal });
-    const reportDown = () => onProgress?.({ kind: "download", done: downDone, total: downloadTotal });
+    let downloadBytesTotal = 0;
+    for (const a of actions) {
+        if (a.kind === "download-new" || a.kind === "download-update") downloadBytesTotal += a.size ?? 0;
+        else if (a.kind === "conflict") downloadBytesTotal += a.remoteSize ?? 0;
+    }
+    let uploadBytesTotal = 0; // completed once upload sizes are known (below)
+    let upDone = 0, downDone = 0, upBytes = 0, downBytes = 0;
+    const reportUp = () => onProgress?.({ kind: "upload", done: upDone, total: uploadTotal, bytes: upBytes, totalBytes: uploadBytesTotal });
+    const reportDown = () => onProgress?.({ kind: "download", done: downDone, total: downloadTotal, bytes: downBytes, totalBytes: downloadBytesTotal });
 
     // 1) New uploads — resolve/create parent folders, then manifest→PUT→commit.
     const uploadItems: UploadItem[] = [];
@@ -114,12 +121,19 @@ export async function applyActions(
             failures.push({ action: `upload-new ${a.relPath}`, error: (err as Error).message });
         }
     }
+    // Now that upload sizes are known, finalise the upload byte total (new files
+    // + a best-effort stat of each changed file) so the ETA is stable from the
+    // first event. A file that fails to stat here is still handled in loop 2.
+    uploadBytesTotal = uploadItems.reduce((sum, i) => sum + i.size, 0);
+    for (const a of actions) {
+        if (a.kind !== "upload-update") continue;
+        try { uploadBytesTotal += statSync(join(root, a.localPath)).size; } catch { /* retried below */ }
+    }
     if (uploadItems.length > 0) {
         try {
-            // Each PUT bumps the running upload count so a big first push shows
-            // live movement. uploadNew reports 0..uploadItems.length; offset by
-            // any upload-update files handled below (they run after, from 0).
-            const n = await remote.uploadNew(uploadItems, done => { upDone = done; reportUp(); });
+            // Each PUT bumps the running upload count + bytes so a big first push
+            // shows live movement and a byte-based ETA, not one summary at the end.
+            const n = await remote.uploadNew(uploadItems, (done, bytes) => { upDone = done; upBytes += bytes; reportUp(); });
             applied += n;
             debug(`sync: uploaded ${n} new file(s)`);
         } catch (err) {
@@ -142,7 +156,7 @@ export async function applyActions(
                 await remote.uploadVersion(full, name, size, mime, a.remoteId!, folderId);
             }
             applied++;
-            upDone++; reportUp();
+            upDone++; upBytes += size; reportUp();
         } catch (err) {
             failures.push({ action: `upload-update ${a.relPath}`, error: (err as Error).message });
         }
@@ -169,7 +183,7 @@ export async function applyActions(
                     await Bun.write(tmp, res);
                     renameSync(tmp, full);
                     applied++;
-                    downDone++; reportDown();
+                    downDone++; downBytes += a.size ?? u.size ?? 0; reportDown();
                 } catch (err) {
                     failures.push({ action: `download ${a.relPath}`, error: (err as Error).message });
                 }
@@ -184,14 +198,14 @@ export async function applyActions(
     //     conflicted copy uploads on the next cycle — nothing is frozen or lost.
     const conflictActions = actions.filter(a => a.kind === "conflict") as Extract<SyncAction, { kind: "conflict" }>[];
     if (conflictActions.length > 0) {
-        const pull: { remoteId: string; relPath: string }[] = [];
+        const pull: { remoteId: string; relPath: string; size?: number }[] = [];
         for (const a of conflictActions) {
             try {
                 const orig = join(root, a.relPath);
                 if (existsSync(orig)) {
                     renameSync(orig, uniqueConflictPath(root, a.relPath));
                 }
-                pull.push({ remoteId: a.remoteId, relPath: a.relPath });
+                pull.push({ remoteId: a.remoteId, relPath: a.relPath, size: a.remoteSize });
             } catch (err) {
                 failures.push({ action: `conflict ${a.relPath}`, error: (err as Error).message });
             }
@@ -212,7 +226,7 @@ export async function applyActions(
                     await Bun.write(tmp, res);
                     renameSync(tmp, full);
                     applied++;
-                    downDone++; reportDown();
+                    downDone++; downBytes += p.size ?? u.size ?? 0; reportDown();
                 } catch (err) {
                     failures.push({ action: `conflict-download ${p.relPath}`, error: (err as Error).message });
                 }

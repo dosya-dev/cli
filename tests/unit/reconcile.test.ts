@@ -34,7 +34,7 @@ describe("reconcile — basic cases", () => {
 
     it("remote-only file → download-new", () => {
         const acts = run({ remote: new Map([["r1", remoteFile()]]) });
-        expect(acts).toEqual([{ kind: "download-new", relPath: "a.txt", remoteId: "r1", localPath: "a.txt" }]);
+        expect(acts).toEqual([{ kind: "download-new", relPath: "a.txt", remoteId: "r1", localPath: "a.txt", size: 3 }]);
     });
 
     it("in-sync tracked file → no action", () => {

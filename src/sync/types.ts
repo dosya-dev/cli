@@ -59,16 +59,16 @@ export type SyncProgress =
     | { kind: "scan" }
     | { kind: "snapshot" }
     | { kind: "plan"; uploads: number; downloads: number; deletes: number }
-    | { kind: "upload"; done: number; total: number }
-    | { kind: "download"; done: number; total: number }
+    | { kind: "upload"; done: number; total: number; bytes: number; totalBytes: number }
+    | { kind: "download"; done: number; total: number; bytes: number; totalBytes: number }
     | { kind: "finalize" };
 
 export type SyncProgressFn = (ev: SyncProgress) => void;
 
 export type SyncAction =
     | { kind: "upload-new" | "upload-update"; relPath: string; localPath: string; folderId: string | null; remoteId?: string }
-    | { kind: "download-new" | "download-update"; relPath: string; remoteId: string; localPath: string }
+    | { kind: "download-new" | "download-update"; relPath: string; remoteId: string; localPath: string; size?: number }
     | { kind: "delete-local"; localPath: string; remoteId: string; relPath: string }
     | { kind: "delete-remote"; remoteId: string; relPath: string }
     | { kind: "move-local"; fromPath: string; toPath: string; remoteId: string }
-    | { kind: "conflict"; relPath: string; remoteId: string; localMtimeMs: number; remoteUpdatedAt: number };
+    | { kind: "conflict"; relPath: string; remoteId: string; localMtimeMs: number; remoteUpdatedAt: number; remoteSize?: number };
