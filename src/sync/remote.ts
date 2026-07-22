@@ -156,9 +156,12 @@ export class SyncRemote {
         for (const u of manifest.uploads ?? []) {
             const item = byRel.get(u.relPath);
             if (!item) continue;
+            // Buffer the file rather than passing the BunFile directly — a
+            // BunFile as a fetch body segfaults the compiled binary (Bun bug),
+            // and a known Content-Length is what R2's presigned PUT expects.
             const res = await fetch(u.url, {
                 method: "PUT",
-                body: Bun.file(item.localPath),
+                body: await Bun.file(item.localPath).arrayBuffer(),
                 headers: { "Content-Type": u.contentType },
                 signal: AbortSignal.timeout(getLongTimeout(600_000)),
             });
@@ -253,9 +256,11 @@ export class SyncRemote {
             for (const c of toUpload) {
                 const url = urls.get(c.hash);
                 if (!url) throw new Error(`no presigned url for chunk ${c.hash.slice(0, 8)}`);
+                // Buffer the chunk (see the note in uploadNew: a BunFile/Blob
+                // body segfaults the compiled binary).
                 const res = await fetch(url, {
                     method: "PUT",
-                    body: file.slice(c.offset, c.offset + c.size),
+                    body: await file.slice(c.offset, c.offset + c.size).arrayBuffer(),
                     headers: { "Content-Type": "application/octet-stream" },
                     signal: AbortSignal.timeout(getLongTimeout(600_000)),
                 });
