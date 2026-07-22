@@ -1,5 +1,6 @@
 import { join, dirname, basename } from "path";
-import { mkdirSync, statSync, renameSync, rmSync, existsSync } from "fs";
+import { mkdirSync, renameSync, rmSync, existsSync } from "fs";
+import { stat } from "fs/promises";
 import { getLongTimeout } from "../runtime";
 import { loadConfig } from "../config";
 import { debug } from "../output";
@@ -121,26 +122,42 @@ export async function applyActions(
     const reportUp = () => onProgress?.({ kind: "upload", done: upDone, total: uploadTotal, bytes: upBytes, totalBytes: uploadBytesTotal });
     const reportDown = () => onProgress?.({ kind: "download", done: downDone, total: downloadTotal, bytes: downBytes, totalBytes: downloadBytesTotal });
 
-    // 1) New uploads — resolve/create parent folders, then manifest→PUT→commit.
-    const uploadItems: UploadItem[] = [];
+    const STAT_BATCH = 256;
+
+    // 1) New uploads — resolve parent folders serially (so idempotent folder
+    //    creation can't race the shared cache), then stat files in bounded-
+    //    parallel batches. A 100k-file first backup must not block the event
+    //    loop on a synchronous statSync loop before uploads even start.
+    const prepared: { relPath: string; full: string; name: string; folderId: string | null }[] = [];
     for (const a of actions) {
         if (a.kind !== "upload-new") continue;
         try {
             const folderId = await ensureRemoteFolder(remote, pair.remoteFolderId, folderCache, parentOf(a.relPath));
-            const full = join(root, a.localPath);
-            const size = statSync(full).size;
-            uploadItems.push({ relPath: a.relPath, name: basename(a.relPath), size, folderId, localPath: full });
+            prepared.push({ relPath: a.relPath, full: join(root, a.localPath), name: basename(a.relPath), folderId });
         } catch (err) {
             failures.push({ action: `upload-new ${a.relPath}`, error: (err as Error).message });
         }
     }
+    const uploadItems: UploadItem[] = [];
+    for (let i = 0; i < prepared.length; i += STAT_BATCH) {
+        await Promise.all(prepared.slice(i, i + STAT_BATCH).map(async p => {
+            try {
+                const size = (await stat(p.full)).size;
+                uploadItems.push({ relPath: p.relPath, name: p.name, size, folderId: p.folderId, localPath: p.full });
+            } catch (err) {
+                failures.push({ action: `upload-new ${p.relPath}`, error: (err as Error).message });
+            }
+        }));
+    }
     // Now that upload sizes are known, finalise the upload byte total (new files
-    // + a best-effort stat of each changed file) so the ETA is stable from the
+    // + changed files, statted in parallel too) so the ETA is stable from the
     // first event. A file that fails to stat here is still handled in loop 2.
     uploadBytesTotal = uploadItems.reduce((sum, i) => sum + i.size, 0);
-    for (const a of actions) {
-        if (a.kind !== "upload-update") continue;
-        try { uploadBytesTotal += statSync(join(root, a.localPath)).size; } catch { /* retried below */ }
+    const updateActions = actions.filter(a => a.kind === "upload-update") as Extract<SyncAction, { kind: "upload-new" | "upload-update" }>[];
+    for (let i = 0; i < updateActions.length; i += STAT_BATCH) {
+        const sizes = await Promise.all(updateActions.slice(i, i + STAT_BATCH).map(a =>
+            stat(join(root, a.localPath)).then(s => s.size).catch(() => 0)));
+        for (const s of sizes) uploadBytesTotal += s;
     }
     // Partition by size: small files take the fast presigned batch path
     // (buffered, but bounded); large files stream via upload/init (multipart +
@@ -185,7 +202,7 @@ export async function applyActions(
         if (a.kind !== "upload-update") continue;
         try {
             const full = join(root, a.localPath);
-            const size = statSync(full).size;
+            const size = (await stat(full)).size;
             const mime = Bun.file(full).type || "application/octet-stream";
             const name = basename(a.relPath);
             const folderId = await ensureRemoteFolder(remote, pair.remoteFolderId, folderCache, parentOf(a.relPath));
