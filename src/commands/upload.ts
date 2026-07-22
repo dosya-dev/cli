@@ -5,6 +5,7 @@ import { requireAuth } from "../config";
 import { Resolver } from "../resolver";
 import { ProgressBar } from "../progress";
 import { getLongTimeout } from "../runtime";
+import { Semaphore } from "../semaphore";
 import {
     uploadMultipart, loadUploadSession, saveUploadSession, removeUploadSession, makeSidecar,
     type ResumableInfo, type UploadedFile,
@@ -209,37 +210,10 @@ function walkDir(dir: string, out: WalkResult = { files: [], skipped: [] }): Wal
     return out;
 }
 
-/**
- * Promise-based semaphore for controlled concurrency (no busy-wait).
- */
-export class Semaphore {
-    private available: number;
-    private queue: (() => void)[] = [];
-
-    constructor(max: number) {
-        if (!Number.isInteger(max) || max < 1) {
-            throw new RangeError(`Semaphore requires a positive integer, got ${max}`);
-        }
-        this.available = max;
-    }
-
-    async acquire(): Promise<void> {
-        if (this.available > 0) {
-            this.available--;
-            return;
-        }
-        await new Promise<void>(resolve => this.queue.push(resolve));
-    }
-
-    release(): void {
-        const next = this.queue.shift();
-        if (next) {
-            next();
-        } else {
-            this.available++;
-        }
-    }
-}
+// Semaphore now lives in its own module (../semaphore) so the sync engine can
+// reuse it without pulling in the whole upload command. Re-exported for the
+// existing test importer.
+export { Semaphore };
 
 /**
  * `parseInt("abc")` is NaN and `new Semaphore(NaN)` never grants a slot, so an

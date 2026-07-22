@@ -3,10 +3,18 @@ import { mkdirSync, statSync, renameSync, rmSync, existsSync } from "fs";
 import { getLongTimeout } from "../runtime";
 import { loadConfig } from "../config";
 import { debug } from "../output";
-import { SyncRemote, remoteFolderPaths, type UploadItem } from "./remote";
+import { SyncRemote, remoteFolderPaths, DEFAULT_SYNC_PARALLEL, type UploadItem } from "./remote";
 import { DELTA_MAX_BYTES } from "./chunker";
+import { Semaphore } from "../semaphore";
 import type { SyncAction, SyncPair, SyncProgressFn } from "./types";
 import type { FolderNode } from "../resolver";
+
+/** Parse the `sync_parallel` config value, clamped to a sane 1–16. */
+function resolveParallel(raw: string | undefined): number {
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 1) return DEFAULT_SYNC_PARALLEL;
+    return Math.min(16, Math.floor(n));
+}
 
 export interface ApplyResult {
     applied: number;
@@ -87,8 +95,13 @@ export async function applyActions(
     const conflicts = actions.filter(a => a.kind === "conflict").length;
     const root = pair.local;
     const folderCache = new Map<string, string>(remoteFolderPaths(folders, pair.remoteFolderId));
+    const cfg = await loadConfig();
     // Block-level delta upload is opt-in (config `sync_delta`) and capped.
-    const deltaEnabled = (await loadConfig())?.sync_delta === "true";
+    const deltaEnabled = cfg?.sync_delta === "true";
+    // How many transfers run at once. Sequential transfers are latency-bound and
+    // crawl on a big push/pull; this is the single biggest throughput lever.
+    const parallel = resolveParallel(cfg?.sync_parallel);
+    const sem = new Semaphore(parallel);
 
     // Running totals for progress. Uploads = new files + changed-file versions;
     // downloads = new/updated pulls + keep-both conflict pulls. Byte totals feed
@@ -133,7 +146,13 @@ export async function applyActions(
         try {
             // Each PUT bumps the running upload count + bytes so a big first push
             // shows live movement and a byte-based ETA, not one summary at the end.
-            const n = await remote.uploadNew(uploadItems, (done, bytes) => { upDone = done; upBytes += bytes; reportUp(); });
+            // Per-file failures are collected (not fatal) so one bad file in /var
+            // doesn't abort the whole backup — it just retries next cycle.
+            const n = await remote.uploadNew(uploadItems, {
+                concurrency: parallel,
+                onProgress: (done, bytes) => { upDone = done; upBytes += bytes; reportUp(); },
+                onError: (name, err) => failures.push({ action: `upload-new ${name}`, error: err.message }),
+            });
             applied += n;
             debug(`sync: uploaded ${n} new file(s)`);
         } catch (err) {
@@ -142,6 +161,9 @@ export async function applyActions(
     }
 
     // 2) Version uploads for changed files (delta when enabled + under the cap).
+    //    Resolve folders/sizes serially (avoids concurrent folder-create races),
+    //    then transfer concurrently.
+    const updates: { relPath: string; full: string; size: number; mime: string; name: string; remoteId: string; folderId: string | null }[] = [];
     for (const a of actions) {
         if (a.kind !== "upload-update") continue;
         try {
@@ -150,17 +172,24 @@ export async function applyActions(
             const mime = Bun.file(full).type || "application/octet-stream";
             const name = basename(a.relPath);
             const folderId = await ensureRemoteFolder(remote, pair.remoteFolderId, folderCache, parentOf(a.relPath));
-            if (deltaEnabled && size > 0 && size <= DELTA_MAX_BYTES) {
-                await remote.uploadDelta(full, name, size, mime, a.remoteId!, folderId);
-            } else {
-                await remote.uploadVersion(full, name, size, mime, a.remoteId!, folderId);
-            }
-            applied++;
-            upDone++; upBytes += size; reportUp();
+            updates.push({ relPath: a.relPath, full, size, mime, name, remoteId: a.remoteId!, folderId });
         } catch (err) {
             failures.push({ action: `upload-update ${a.relPath}`, error: (err as Error).message });
         }
     }
+    await Promise.all(updates.map(u => sem.run(async () => {
+        try {
+            if (deltaEnabled && u.size > 0 && u.size <= DELTA_MAX_BYTES) {
+                await remote.uploadDelta(u.full, u.name, u.size, u.mime, u.remoteId, u.folderId);
+            } else {
+                await remote.uploadVersion(u.full, u.name, u.size, u.mime, u.remoteId, u.folderId);
+            }
+            applied++;
+            upDone++; upBytes += u.size; reportUp();
+        } catch (err) {
+            failures.push({ action: `upload-update ${u.relPath}`, error: (err as Error).message });
+        }
+    })));
 
     // 3) Downloads (new + updated).
     const downloads = actions.filter(a => a.kind === "download-new" || a.kind === "download-update") as Extract<SyncAction, { kind: "download-new" | "download-update" }>[];
@@ -168,7 +197,7 @@ export async function applyActions(
         try {
             const urls = await remote.downloadUrls(downloads.map(a => a.remoteId));
             const byId = new Map(urls.map(u => [u.fileId, u]));
-            for (const a of downloads) {
+            await Promise.all(downloads.map(a => sem.run(async () => {
                 try {
                     const u = byId.get(a.remoteId);
                     if (!u) throw new Error("no download url returned");
@@ -187,7 +216,7 @@ export async function applyActions(
                 } catch (err) {
                     failures.push({ action: `download ${a.relPath}`, error: (err as Error).message });
                 }
-            }
+            })));
         } catch (err) {
             failures.push({ action: "download-manifest", error: (err as Error).message });
         }
@@ -213,7 +242,7 @@ export async function applyActions(
         try {
             const urls = await remote.downloadUrls(pull.map(p => p.remoteId));
             const byId = new Map(urls.map(u => [u.fileId, u]));
-            for (const p of pull) {
+            await Promise.all(pull.map(p => sem.run(async () => {
                 try {
                     const u = byId.get(p.remoteId);
                     if (!u) throw new Error("no download url returned");
@@ -230,7 +259,7 @@ export async function applyActions(
                 } catch (err) {
                     failures.push({ action: `conflict-download ${p.relPath}`, error: (err as Error).message });
                 }
-            }
+            })));
         } catch (err) {
             failures.push({ action: "conflict-download-manifest", error: (err as Error).message });
         }

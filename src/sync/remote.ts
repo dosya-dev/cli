@@ -2,9 +2,22 @@ import { statSync } from "fs";
 import { DosyaClient } from "../client";
 import { getLongTimeout } from "../runtime";
 import { uploadMultipart, type ResumableInfo } from "../multipart";
+import { Semaphore } from "../semaphore";
 import { chunkFile } from "./chunker";
 import type { FolderNode } from "../resolver";
 import type { RemoteFile } from "./types";
+
+/** Default concurrent transfers for sync (tunable via config `sync_parallel`). */
+export const DEFAULT_SYNC_PARALLEL = 8;
+
+export interface UploadNewOpts {
+    /** Fires after each successful PUT with the running count and file size. */
+    onProgress?: (done: number, bytes: number) => void;
+    /** Fires when a single file fails to upload (the batch still continues). */
+    onError?: (name: string, err: Error) => void;
+    /** Max concurrent PUTs (default {@link DEFAULT_SYNC_PARALLEL}). */
+    concurrency?: number;
+}
 
 const SYNC_HEADER = { "X-Dosya-Sync": "1" };
 
@@ -135,13 +148,16 @@ export class SyncRemote {
 
     /**
      * Upload brand-new files via manifest → presigned PUT → commit, batched.
-     * `onProgress(done, bytes)` fires after each file's PUT with the running
-     * file count and that file's size, so a long push shows live movement and a
-     * byte-based ETA instead of one summary at the end.
+     * PUTs within a batch run concurrently (bounded by `opts.concurrency`) —
+     * uploading one file at a time is latency-bound and crawls on a big push.
+     * A single file's failure is reported via `opts.onError` and skipped rather
+     * than aborting the whole batch (it retries next cycle). `opts.onProgress`
+     * fires after each success with the running count + file size for the ETA.
      */
-    async uploadNew(items: UploadItem[], onProgress?: (done: number, bytes: number) => void): Promise<number> {
+    async uploadNew(items: UploadItem[], opts: UploadNewOpts = {}): Promise<number> {
         if (items.length === 0) return 0;
         const region = await this.getRegion();
+        const sem = new Semaphore(Math.max(1, opts.concurrency ?? DEFAULT_SYNC_PARALLEL));
 
         // The server caps manifest/commit at 5000 files per request, so a large
         // sync (thousands of new files) must be chunked or it's rejected wholesale.
@@ -167,25 +183,31 @@ export class SyncRemote {
             });
 
             const byRel = new Map(slice.map(i => [i.relPath, i]));
-            const commitFiles: { file_id: string; r2_key: string; name: string; size: number; folder_id: string | null; content_type: string; ext: string | null }[] = [];
+            type CommitFile = { file_id: string; r2_key: string; name: string; size: number; folder_id: string | null; content_type: string; ext: string | null };
 
-            for (const u of manifest.uploads ?? []) {
+            const results = await Promise.all((manifest.uploads ?? []).map(u => sem.run(async (): Promise<CommitFile | null> => {
                 const item = byRel.get(u.relPath);
-                if (!item) continue;
-                // Buffer the file rather than passing the BunFile directly — a
-                // BunFile as a fetch body segfaults the compiled binary (Bun bug),
-                // and a known Content-Length is what R2's presigned PUT expects.
-                const res = await fetch(u.url, {
-                    method: "PUT",
-                    body: await Bun.file(item.localPath).arrayBuffer(),
-                    headers: { "Content-Type": u.contentType },
-                    signal: AbortSignal.timeout(getLongTimeout(600_000)),
-                });
-                if (!res.ok) throw new Error(`R2 PUT failed for ${u.name}: HTTP ${res.status}`);
-                commitFiles.push({ file_id: u.fileId, r2_key: u.r2Key, name: u.name, size: u.size, folder_id: u.folderId, content_type: u.contentType, ext: u.ext });
-                onProgress?.(++putDone, item.size);
-            }
+                if (!item) return null;
+                try {
+                    // Buffer the file rather than passing the BunFile directly — a
+                    // BunFile as a fetch body segfaults the compiled binary (Bun bug),
+                    // and a known Content-Length is what R2's presigned PUT expects.
+                    const res = await fetch(u.url, {
+                        method: "PUT",
+                        body: await Bun.file(item.localPath).arrayBuffer(),
+                        headers: { "Content-Type": u.contentType },
+                        signal: AbortSignal.timeout(getLongTimeout(600_000)),
+                    });
+                    if (!res.ok) throw new Error(`R2 PUT failed for ${u.name}: HTTP ${res.status}`);
+                    opts.onProgress?.(++putDone, item.size);
+                    return { file_id: u.fileId, r2_key: u.r2Key, name: u.name, size: u.size, folder_id: u.folderId, content_type: u.contentType, ext: u.ext };
+                } catch (err) {
+                    opts.onError?.(u.name, err as Error);
+                    return null;
+                }
+            })));
 
+            const commitFiles = results.filter((f): f is CommitFile => f !== null);
             if (commitFiles.length > 0) {
                 const commit = await this.req<{ committed: number }>("/api/sync/commit", {
                     method: "POST",

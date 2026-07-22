@@ -174,4 +174,32 @@ describe("sync large trees (server batch caps)", () => {
             rmSync(root, { recursive: true, force: true });
         }
     });
+
+    it("a single failed upload is reported but does not abort the batch", async () => {
+        process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "dosya-sync-fail-cfg-"));
+        const root = mkdtempSync(join(tmpdir(), "dosya-sync-fail-src-"));
+        const api = startFakeSyncApi();
+        api.install();
+        try {
+            // "BOOM.txt" gets a presigned URL that 500s; the other four upload fine.
+            for (const name of ["a.txt", "b.txt", "BOOM.txt", "c.txt", "d.txt"]) {
+                writeFileSync(join(root, name), `body ${name}`);
+            }
+            const client = new DosyaClient(api.base, "dos_test");
+            const pair: SyncPair = {
+                id: "p_fail", local: root, remoteWorkspaceId: "ws_test", remoteFolderId: null,
+                syncMode: "push", conflictStrategy: "last-write-wins", excludes: [], pollIntervalMs: 15000,
+            };
+            const res = await runCycle(client, pair, false);
+            // The four good files committed; only BOOM is reported failed.
+            expect(res.applied).toBe(4);
+            expect(api.files.size).toBe(4);
+            expect(res.failures).toHaveLength(1);
+            expect(res.failures[0].action).toContain("BOOM.txt");
+            expect([...api.paths().keys()].sort()).toEqual(["a.txt", "b.txt", "c.txt", "d.txt"]);
+        } finally {
+            api.stop();
+            rmSync(root, { recursive: true, force: true });
+        }
+    });
 });

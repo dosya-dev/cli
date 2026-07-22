@@ -88,6 +88,11 @@ export function startFakeSyncApi(): FakeSyncApi {
             if (process.env.FAKE_DEBUG) console.error(`[fake] ${method} ${path}`);
 
             // ── R2 stand-ins ──
+            // A PUT to /r2fail always 500s — lets a test assert that one bad file
+            // is reported but doesn't abort the rest of the batch.
+            if (method === "PUT" && path === "/r2fail") {
+                return new Response("boom", { status: 500 });
+            }
             if (method === "PUT" && path.startsWith("/r2put/")) {
                 objects.set(path.slice("/r2put/".length), new Uint8Array(await req.arrayBuffer()));
                 return new Response("", { status: 200 });
@@ -122,9 +127,12 @@ export function startFakeSyncApi(): FakeSyncApi {
                 if (body.files.length > 5000) return json({ ok: false, error: "Max 5000 files per request" }, 400);
                 const uploads = body.files.map(f => {
                     const fileId = id("file_");
+                    // A file named "*BOOM*" gets a presigned URL that 500s on PUT,
+                    // so tests can force a single-file upload failure deterministically.
+                    const url = f.name.includes("BOOM") ? `${base}/r2fail` : `${base}/r2put/${fileId}`;
                     return {
                         relPath: f.relPath, fileId, r2Key: `key/${fileId}`, name: f.name,
-                        url: `${base}/r2put/${fileId}`, size: f.size, folderId: f.folder_id,
+                        url, size: f.size, folderId: f.folder_id,
                         contentType: "application/octet-stream", ext: f.name.includes(".") ? f.name.slice(f.name.lastIndexOf(".")) : null,
                     };
                 });

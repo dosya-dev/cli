@@ -9,6 +9,8 @@ export interface DosyaConfig {
     default_workspace?: string;
     /** "true" enables block-level delta upload for sync (opt-in). */
     sync_delta?: string;
+    /** Max concurrent file transfers during sync (default 8, clamped 1–16). */
+    sync_parallel?: string;
 }
 
 /**
