@@ -175,6 +175,35 @@ describe("sync large trees (server batch caps)", () => {
         }
     });
 
+    it("streams a large new file via upload/init (not the buffered batch)", async () => {
+        process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "dosya-sync-large-cfg-"));
+        const root = mkdtempSync(join(tmpdir(), "dosya-sync-large-src-"));
+        const api = startFakeSyncApi();
+        api.install();
+        try {
+            // 9 MiB > UPLOAD_STREAM_THRESHOLD (8 MiB) → forced onto the streaming path.
+            const big = Buffer.alloc(9 * 1024 * 1024, "x");
+            writeFileSync(join(root, "backup.bin"), big);
+            writeFileSync(join(root, "small.txt"), "tiny");
+            const client = new DosyaClient(api.base, "dos_test");
+            const pair: SyncPair = {
+                id: "p_large", local: root, remoteWorkspaceId: "ws_test", remoteFolderId: null,
+                syncMode: "push", conflictStrategy: "last-write-wins", excludes: [], pollIntervalMs: 15000,
+            };
+            const res = await runCycle(client, pair, false);
+            expect(res.failures).toEqual([]);
+            expect(res.applied).toBe(2);
+            const paths = api.paths();
+            expect(paths.has("backup.bin")).toBe(true);
+            expect(paths.has("small.txt")).toBe(true);
+            // The large file's bytes are intact (streamed end-to-end, not truncated).
+            expect(api.objects.get(paths.get("backup.bin")!)!.byteLength).toBe(big.byteLength);
+        } finally {
+            api.stop();
+            rmSync(root, { recursive: true, force: true });
+        }
+    });
+
     it("a single failed upload is reported but does not abort the batch", async () => {
         process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "dosya-sync-fail-cfg-"));
         const root = mkdtempSync(join(tmpdir(), "dosya-sync-fail-src-"));

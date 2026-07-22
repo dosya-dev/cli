@@ -30,6 +30,7 @@ const resumable = (): ResumableInfo => ({
 /** Minimal stand-in for DosyaClient that records the parts it was asked to send. */
 function fakeClient(opts: { uploadedParts?: number[]; etagFor?: (n: number) => string } = {}) {
     const sentParts: number[] = [];
+    const seenHeaders: Record<string, string>[] = [];
     let completed = false;
 
     const client = {
@@ -45,7 +46,17 @@ function fakeClient(opts: { uploadedParts?: number[]; etagFor?: (n: number) => s
             }
             throw new Error(`unexpected GET ${path}`);
         },
-        async request(path: string, init: { rawBody?: Uint8Array }) {
+        async request(path: string, init: { rawBody?: Uint8Array; headers?: Record<string, string> }) {
+            seenHeaders.push(init.headers ?? {});
+            // The complete call now goes through request() (so it can carry the
+            // X-Dosya-Sync header), not post().
+            if (path.endsWith("/complete")) {
+                completed = true;
+                return {
+                    ok: true, status: 200, headers: new Headers(),
+                    data: { ok: true, file: { id: "file_1", name: "payload.bin", size_bytes: SIZE, version: 1 } },
+                };
+            }
             const n = Number(path.split("/").pop());
             sentParts.push(n);
             return {
@@ -53,14 +64,9 @@ function fakeClient(opts: { uploadedParts?: number[]; etagFor?: (n: number) => s
                 data: { ok: true, part_number: n, etag: opts.etagFor?.(n) ?? `opaque-token-${n}` },
             };
         },
-        async post(path: string) {
-            if (!path.endsWith("/complete")) throw new Error(`unexpected POST ${path}`);
-            completed = true;
-            return { ok: true, file: { id: "file_1", name: "payload.bin", size_bytes: SIZE, version: 1 } };
-        },
     };
 
-    return { client, sentParts, isCompleted: () => completed };
+    return { client, sentParts, seenHeaders, isCompleted: () => completed };
 }
 
 describe("uploadMultipart", () => {
@@ -119,6 +125,21 @@ describe("uploadMultipart", () => {
         });
 
         expect(isCompleted()).toBe(true);
+    });
+
+    it("threads caller headers onto every part + the complete call", async () => {
+        const { client, seenHeaders } = fakeClient();
+
+        await uploadMultipart({
+            client: client as never, filePath, size: SIZE, sessionId: "upl_1",
+            resumable: resumable(), concurrency: 3, bar: null,
+            headers: { "X-Dosya-Sync": "1" },
+        });
+
+        // 3 parts + 1 complete, all carry the sync header (so the upload event
+        // is suppressed just like the batch path).
+        expect(seenHeaders).toHaveLength(4);
+        expect(seenHeaders.every(h => h["X-Dosya-Sync"] === "1")).toBe(true);
     });
 });
 

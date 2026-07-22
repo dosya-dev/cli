@@ -155,6 +155,12 @@ export interface MultipartOptions {
     bar: ProgressBar | null;
     /** Verify each part against the etag R2 returns (default true). */
     verify?: boolean;
+    /**
+     * Extra headers for the API-side calls (parts + complete). The sync engine
+     * passes `X-Dosya-Sync: 1` so a large sync upload's `file_uploaded` event is
+     * suppressed like the batch path — otherwise every big file spams activity.
+     */
+    headers?: Record<string, string>;
 }
 
 /**
@@ -206,7 +212,7 @@ export async function uploadMultipart(opts: MultipartOptions): Promise<UploadedF
             const res = await client.request<PartResponse>(`${resumable.part_upload_url}/${partNumber}`, {
                 method: "PUT",
                 rawBody: data,
-                headers: { "Content-Length": String(data.byteLength) },
+                headers: { "Content-Length": String(data.byteLength), ...opts.headers },
             });
 
             if (!res.ok) {
@@ -253,6 +259,13 @@ export async function uploadMultipart(opts: MultipartOptions): Promise<UploadedF
     }
     if (firstError) throw firstError;
 
-    const done = await client.post<CompleteResponse>(resumable.complete_url);
-    return done.file;
+    const completeRes = await client.request<CompleteResponse>(resumable.complete_url, {
+        method: "POST",
+        headers: opts.headers,
+    });
+    if (!completeRes.ok) {
+        const err = completeRes.data as unknown as { error?: string };
+        throw new Error(err?.error ?? `Completing upload failed: HTTP ${completeRes.status}`);
+    }
+    return completeRes.data.file;
 }

@@ -3,7 +3,7 @@ import { mkdirSync, statSync, renameSync, rmSync, existsSync } from "fs";
 import { getLongTimeout } from "../runtime";
 import { loadConfig } from "../config";
 import { debug } from "../output";
-import { SyncRemote, remoteFolderPaths, DEFAULT_SYNC_PARALLEL, type UploadItem } from "./remote";
+import { SyncRemote, remoteFolderPaths, DEFAULT_SYNC_PARALLEL, UPLOAD_STREAM_THRESHOLD, type UploadItem } from "./remote";
 import { DELTA_MAX_BYTES } from "./chunker";
 import { Semaphore } from "../semaphore";
 import type { SyncAction, SyncPair, SyncProgressFn } from "./types";
@@ -142,13 +142,19 @@ export async function applyActions(
         if (a.kind !== "upload-update") continue;
         try { uploadBytesTotal += statSync(join(root, a.localPath)).size; } catch { /* retried below */ }
     }
-    if (uploadItems.length > 0) {
+    // Partition by size: small files take the fast presigned batch path
+    // (buffered, but bounded); large files stream via upload/init (multipart +
+    // resume) so we never buffer a big file into RAM or lose progress mid-file.
+    const smallNew = uploadItems.filter(i => i.size <= UPLOAD_STREAM_THRESHOLD);
+    const largeNew = uploadItems.filter(i => i.size > UPLOAD_STREAM_THRESHOLD);
+
+    if (smallNew.length > 0) {
         try {
             // Each PUT bumps the running upload count + bytes so a big first push
             // shows live movement and a byte-based ETA, not one summary at the end.
             // Per-file failures are collected (not fatal) so one bad file in /var
             // doesn't abort the whole backup — it just retries next cycle.
-            const n = await remote.uploadNew(uploadItems, {
+            const n = await remote.uploadNew(smallNew, {
                 concurrency: parallel,
                 onProgress: (done, bytes) => { upDone = done; upBytes += bytes; reportUp(); },
                 onError: (name, err) => failures.push({ action: `upload-new ${name}`, error: err.message }),
@@ -159,6 +165,17 @@ export async function applyActions(
             failures.push({ action: "upload-new batch", error: (err as Error).message });
         }
     }
+    // Large new files: stream each via upload/init, bounded by the same pool.
+    await Promise.all(largeNew.map(item => sem.run(async () => {
+        try {
+            const mime = Bun.file(item.localPath).type || "application/octet-stream";
+            await remote.uploadViaInit(item.localPath, item.name, item.size, mime, item.folderId, null);
+            applied++;
+            upDone++; upBytes += item.size; reportUp();
+        } catch (err) {
+            failures.push({ action: `upload-new ${item.relPath}`, error: (err as Error).message });
+        }
+    })));
 
     // 2) Version uploads for changed files (delta when enabled + under the cap).
     //    Resolve folders/sizes serially (avoids concurrent folder-create races),

@@ -1,7 +1,7 @@
 import { statSync } from "fs";
 import { DosyaClient } from "../client";
 import { getLongTimeout } from "../runtime";
-import { uploadMultipart, type ResumableInfo } from "../multipart";
+import { uploadMultipart, loadUploadSession, saveUploadSession, removeUploadSession, makeSidecar, type ResumableInfo } from "../multipart";
 import { Semaphore } from "../semaphore";
 import { chunkFile } from "./chunker";
 import type { FolderNode } from "../resolver";
@@ -9,6 +9,15 @@ import type { RemoteFile } from "./types";
 
 /** Default concurrent transfers for sync (tunable via config `sync_parallel`). */
 export const DEFAULT_SYNC_PARALLEL = 8;
+
+/**
+ * New files at or below this size take the fast presigned batch path (buffered,
+ * but memory stays bounded at threshold × concurrency). Larger files stream via
+ * `upload/init` — multipart + cross-run resume above the server's threshold, a
+ * single streamed PUT below it — so we never buffer a big file into RAM and a
+ * mid-file failure resumes instead of restarting.
+ */
+export const UPLOAD_STREAM_THRESHOLD = 8 * 1024 * 1024; // 8 MiB
 
 export interface UploadNewOpts {
     /** Fires after each successful PUT with the running count and file size. */
@@ -220,26 +229,54 @@ export class SyncRemote {
         return committed;
     }
 
-    /** Upload a new version of an existing file via the upload/init flow. */
-    async uploadVersion(localPath: string, name: string, size: number, mime: string, fileId: string, folderId: string | null): Promise<void> {
-        const init = await this.req<{
-            ok: boolean; session_id: string; upload_url: string; resumable: ResumableInfo | null;
-        }>("/api/upload/init", {
-            method: "POST",
-            body: { workspace_id: this.workspaceId, file_name: name, file_size: size, mime_type: mime, folder_id: folderId, file_id: fileId },
-        });
+    /**
+     * Upload a file through the `upload/init` flow — streaming, never buffering
+     * the whole file. When `fileId` is set it records a new version; when null it
+     * creates a new file. Large files (server returns `resumable`) go multipart
+     * with per-part retry and cross-run resume via an on-disk sidecar; otherwise
+     * a single streamed PUT. The `X-Dosya-Sync` header suppresses the activity
+     * event, matching the batch path.
+     */
+    async uploadViaInit(localPath: string, name: string, size: number, mime: string, folderId: string | null, fileId: string | null): Promise<void> {
+        // Reuse an interrupted session for this exact file (cross-run resume).
+        const resumed = loadUploadSession(localPath, size);
+        let sessionId: string;
+        let uploadUrl: string;
+        let resumable: ResumableInfo | null;
 
-        if (init.resumable) {
-            await uploadMultipart({ client: this.client, filePath: localPath, size, sessionId: init.session_id, resumable: init.resumable, concurrency: 4, bar: null });
+        if (resumed) {
+            sessionId = resumed.session_id;
+            uploadUrl = `/api/upload/${resumed.session_id}`;
+            resumable = resumed.resumable;
+        } else {
+            const init = await this.req<{ session_id: string; upload_url: string; resumable: ResumableInfo | null }>("/api/upload/init", {
+                method: "POST",
+                body: { workspace_id: this.workspaceId, file_name: name, file_size: size, mime_type: mime, folder_id: folderId, ...(fileId ? { file_id: fileId } : {}) },
+            });
+            sessionId = init.session_id;
+            uploadUrl = init.upload_url;
+            resumable = init.resumable;
+            // Persist before sending bytes so an interrupt mid-upload can resume.
+            if (resumable) saveUploadSession(localPath, makeSidecar(localPath, sessionId, size, resumable));
+        }
+
+        if (resumable) {
+            await uploadMultipart({ client: this.client, filePath: localPath, size, sessionId, resumable, concurrency: 4, bar: null, headers: SYNC_HEADER });
+            removeUploadSession(localPath); // success — drop the sidecar
             return;
         }
-        const res = await this.client.request(init.upload_url, {
+        const res = await this.client.request(uploadUrl, {
             method: "PUT",
             rawBody: Bun.file(localPath).stream(),
-            headers: { "Content-Type": mime || "application/octet-stream", "Content-Length": String(size) },
+            headers: { "Content-Type": mime || "application/octet-stream", "Content-Length": String(size), ...SYNC_HEADER },
             timeout: getLongTimeout(600_000),
         });
-        if (!res.ok) throw new Error(`Version upload failed for ${name}: HTTP ${res.status}`);
+        if (!res.ok) throw new Error(`Upload failed for ${name}: HTTP ${res.status}`);
+    }
+
+    /** Upload a new version of an existing file (delegates to {@link uploadViaInit}). */
+    async uploadVersion(localPath: string, name: string, size: number, mime: string, fileId: string, folderId: string | null): Promise<void> {
+        return this.uploadViaInit(localPath, name, size, mime, folderId, fileId);
     }
 
     async downloadUrls(fileIds: string[]): Promise<{ fileId: string; url: string; name: string; size: number }[]> {
