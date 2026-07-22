@@ -1,8 +1,10 @@
 import { join, dirname, basename } from "path";
 import { mkdirSync, statSync, renameSync, rmSync, existsSync } from "fs";
 import { getLongTimeout } from "../runtime";
+import { loadConfig } from "../config";
 import { debug } from "../output";
 import { SyncRemote, remoteFolderPaths, type UploadItem } from "./remote";
+import { DELTA_MAX_BYTES } from "./chunker";
 import type { SyncAction, SyncPair } from "./types";
 import type { FolderNode } from "../resolver";
 
@@ -84,6 +86,8 @@ export async function applyActions(
     const conflicts = actions.filter(a => a.kind === "conflict").length;
     const root = pair.local;
     const folderCache = new Map<string, string>(remoteFolderPaths(folders, pair.remoteFolderId));
+    // Block-level delta upload is opt-in (config `sync_delta`) and capped.
+    const deltaEnabled = (await loadConfig())?.sync_delta === "true";
 
     // 1) New uploads — resolve/create parent folders, then manifest→PUT→commit.
     const uploadItems: UploadItem[] = [];
@@ -108,15 +112,20 @@ export async function applyActions(
         }
     }
 
-    // 2) Version uploads for changed files.
+    // 2) Version uploads for changed files (delta when enabled + under the cap).
     for (const a of actions) {
         if (a.kind !== "upload-update") continue;
         try {
             const full = join(root, a.localPath);
             const size = statSync(full).size;
             const mime = Bun.file(full).type || "application/octet-stream";
+            const name = basename(a.relPath);
             const folderId = await ensureRemoteFolder(remote, pair.remoteFolderId, folderCache, parentOf(a.relPath));
-            await remote.uploadVersion(full, basename(a.relPath), size, mime, a.remoteId!, folderId);
+            if (deltaEnabled && size > 0 && size <= DELTA_MAX_BYTES) {
+                await remote.uploadDelta(full, name, size, mime, a.remoteId!, folderId);
+            } else {
+                await remote.uploadVersion(full, name, size, mime, a.remoteId!, folderId);
+            }
             applied++;
         } catch (err) {
             failures.push({ action: `upload-update ${a.relPath}`, error: (err as Error).message });
@@ -136,7 +145,10 @@ export async function applyActions(
                     const full = join(root, a.localPath);
                     mkdirSync(dirname(full), { recursive: true });
                     const res = await fetch(u.url, { signal: AbortSignal.timeout(getLongTimeout(600_000)) });
-                    if (!res.ok || !res.body) throw new Error(`download HTTP ${res.status}`);
+                    // Check res.ok only — reading the res.body getter before
+                    // Bun.write(res) makes Bun.write hang forever (verified). Let
+                    // Bun.write stream the body itself.
+                    if (!res.ok) throw new Error(`download HTTP ${res.status}`);
                     const tmp = `${full}.dosya-partial`;
                     await Bun.write(tmp, res);
                     renameSync(tmp, full);
@@ -177,7 +189,8 @@ export async function applyActions(
                     const full = join(root, p.relPath);
                     mkdirSync(dirname(full), { recursive: true });
                     const res = await fetch(u.url, { signal: AbortSignal.timeout(getLongTimeout(600_000)) });
-                    if (!res.ok || !res.body) throw new Error(`download HTTP ${res.status}`);
+                    // See the note above: never touch res.body before Bun.write.
+                    if (!res.ok) throw new Error(`download HTTP ${res.status}`);
                     const tmp = `${full}.dosya-partial`;
                     await Bun.write(tmp, res);
                     renameSync(tmp, full);

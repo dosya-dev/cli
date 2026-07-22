@@ -7,6 +7,8 @@ export interface DosyaConfig {
     api_key: string;
     api_base: string;
     default_workspace?: string;
+    /** "true" enables block-level delta upload for sync (opt-in). */
+    sync_delta?: string;
 }
 
 /**

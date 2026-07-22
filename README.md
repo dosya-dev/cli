@@ -174,7 +174,13 @@ suspicious mass-delete is detected.
 **Ignore rules:** pass `--exclude '<glob>'` (repeatable) when adding a pair, or drop
 a `.dosyaignore` file at the sync root (one glob per line, `#` comments allowed).
 
-Transfers are whole-file and resumable; state lives in `~/.dosya/sync/`.
+**Block-level delta (opt-in):** by default an edited file re-uploads whole. Enable
+`dosya config set sync_delta true` and edits to files ≤ 64 MB upload only the
+changed blocks (content-defined chunks), reusing everything already stored. New
+files and larger files still upload whole. Trade-off: chunks are kept alongside
+the assembled file, so delta-synced files use extra storage for the dedup pool.
+
+Transfers are resumable; state lives in `~/.dosya/sync/`.
 
 ### Workspace Management
 

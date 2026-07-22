@@ -2,6 +2,7 @@ import { statSync } from "fs";
 import { DosyaClient } from "../client";
 import { getLongTimeout } from "../runtime";
 import { uploadMultipart, type ResumableInfo } from "../multipart";
+import { chunkFile } from "./chunker";
 import type { FolderNode } from "../resolver";
 import type { RemoteFile } from "./types";
 
@@ -202,6 +203,81 @@ export class SyncRemote {
             { method: "POST", body: { workspace_id: this.workspaceId, file_ids: fileIds } },
         );
         return data.downloads ?? [];
+    }
+
+    /** Which of these chunk hashes the workspace does NOT already have. */
+    async chunksMissing(hashes: string[]): Promise<Set<string>> {
+        const uniq = [...new Set(hashes)];
+        const out = new Set<string>();
+        const BATCH = 20000; // server MAX_HASHES
+        for (let i = 0; i < uniq.length; i += BATCH) {
+            const d = await this.req<{ missing: string[] }>("/api/sync/chunks/missing", {
+                method: "POST",
+                body: { workspace_id: this.workspaceId, hashes: uniq.slice(i, i + BATCH) },
+            });
+            for (const h of d.missing ?? []) out.add(h);
+        }
+        return out;
+    }
+
+    /** Presigned R2 PUT urls for a set of chunks, keyed by hash. */
+    async chunksPresign(chunks: { hash: string; size: number }[], region: string): Promise<Map<string, string>> {
+        const out = new Map<string, string>();
+        const BATCH = 5000; // server MAX_CHUNKS
+        for (let i = 0; i < chunks.length; i += BATCH) {
+            const d = await this.req<{ uploads: { hash: string; url: string }[] }>("/api/sync/chunks/presign", {
+                method: "POST",
+                body: { workspace_id: this.workspaceId, region, chunks: chunks.slice(i, i + BATCH) },
+            });
+            for (const u of d.uploads ?? []) out.set(u.hash, u.url);
+        }
+        return out;
+    }
+
+    /**
+     * Block-level delta upload of a new version: chunk the file, upload only the
+     * chunks the workspace lacks, then commit the ordered manifest (the server
+     * reassembles). Caller guarantees size <= DELTA_MAX_BYTES.
+     */
+    async uploadDelta(localPath: string, name: string, size: number, mime: string, fileId: string | null, folderId: string | null): Promise<void> {
+        const region = await this.getRegion();
+        const manifest = await chunkFile(localPath);
+        const missing = await this.chunksMissing(manifest.map(c => c.hash));
+
+        const seen = new Set<string>();
+        const toUpload = manifest.filter(c => missing.has(c.hash) && !seen.has(c.hash) && (seen.add(c.hash), true));
+
+        if (toUpload.length > 0) {
+            const urls = await this.chunksPresign(toUpload.map(c => ({ hash: c.hash, size: c.size })), region);
+            const file = Bun.file(localPath);
+            for (const c of toUpload) {
+                const url = urls.get(c.hash);
+                if (!url) throw new Error(`no presigned url for chunk ${c.hash.slice(0, 8)}`);
+                const res = await fetch(url, {
+                    method: "PUT",
+                    body: file.slice(c.offset, c.offset + c.size),
+                    headers: { "Content-Type": "application/octet-stream" },
+                    signal: AbortSignal.timeout(getLongTimeout(600_000)),
+                });
+                if (!res.ok) throw new Error(`chunk PUT failed (${c.hash.slice(0, 8)}): HTTP ${res.status}`);
+            }
+        }
+
+        const ext = name.includes(".") ? name.slice(name.lastIndexOf(".")) : null;
+        await this.req("/api/sync/chunks/commit", {
+            method: "POST",
+            body: {
+                workspace_id: this.workspaceId,
+                region,
+                file_id: fileId,
+                folder_id: folderId,
+                name,
+                size,
+                content_type: mime,
+                ext,
+                chunks: manifest.map(c => ({ hash: c.hash, size: c.size })),
+            },
+        });
     }
 
     async moveFile(id: string, folderId: string | null): Promise<void> {

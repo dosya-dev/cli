@@ -666,7 +666,8 @@ async function downloadRecursive(
                 const full = join(outDir, f.relPath);
                 mkdirSync(dirname(full), { recursive: true });
                 const res = await fetch(u.url, { signal: AbortSignal.timeout(getLongTimeout(600_000)) });
-                if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+                // Check res.ok only — touching res.body before Bun.write(res) hangs it.
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const tmp = `${full}.dosya-partial`;
                 await Bun.write(tmp, res);
                 renameSync(tmp, full);

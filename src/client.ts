@@ -1,5 +1,5 @@
 import { debug } from "./output";
-import { ApiError, AuthError, NetworkError } from "./errors";
+import { ApiError, AuthError, NetworkError, httpErrorMessage } from "./errors";
 import { getRequestTimeout } from "./runtime";
 
 export { ApiError, AuthError, NetworkError };
@@ -78,6 +78,28 @@ export class DosyaClient {
         }
     }
 
+    /**
+     * Extract the best available error message from a non-2xx response and
+     * normalize it to `{ error }`. The server's JSON `error` always wins; a
+     * bare or non-JSON body falls back to a human-readable status message, and a
+     * non-JSON body on a 4xx also hints that the API base may be wrong (the
+     * classic "pointed at dosya.dev instead of api.dosya.dev → 404 HTML" trap).
+     */
+    private async errorData(response: Response): Promise<{ error?: string }> {
+        const contentType = response.headers.get("content-type") ?? "";
+        if (contentType.includes("application/json")) {
+            const body = await response.json().catch(() => null) as { error?: string } | null;
+            const msg = typeof body?.error === "string" ? body.error.trim() : "";
+            return msg ? { error: msg } : {};
+        }
+        await response.body?.cancel().catch(() => {});
+        const base = httpErrorMessage(response.status);
+        if (response.status >= 400 && response.status < 500) {
+            return { error: `${base} (the API returned a non-JSON response — check DOSYA_API_BASE, currently ${this.apiBase})` };
+        }
+        return { error: base };
+    }
+
     async request<T = unknown>(path: string, opts: RequestOptions = {}): Promise<ApiResponse<T>> {
         const url = path.startsWith("http") ? path : `${this.apiBase}${path}`;
         const method = (opts.method ?? "GET").toUpperCase();
@@ -125,15 +147,18 @@ export class DosyaClient {
 
                 debug(`${method} ${url} → ${response.status}`);
 
-                // Auth errors — never retry. Drain the body first so the
-                // socket can be reused instead of being held open.
-                if (response.status === 401 || response.status === 403) {
+                // Auth errors — never retry. A 401 almost always means the key
+                // is bad, so the re-auth hint is the most useful thing to say. A
+                // 403 carries a specific reason (plan limit, forced 2FA, disabled
+                // password login, missing permission…) — surface the server's
+                // message instead of hiding it behind a generic string.
+                if (response.status === 401) {
                     await response.body?.cancel().catch(() => {});
-                    throw new AuthError(
-                        response.status === 401
-                            ? "Authentication failed. Run 'dosya auth login' to re-authenticate."
-                            : "Permission denied. You don't have access to this resource.",
-                    );
+                    throw new AuthError("Authentication failed. Run 'dosya auth login' to re-authenticate.");
+                }
+                if (response.status === 403) {
+                    const { error } = await this.errorData(response);
+                    throw new AuthError(error || httpErrorMessage(403));
                 }
 
                 // Rate limited. The request was rejected, not processed, so
@@ -148,9 +173,10 @@ export class DosyaClient {
                     continue;
                 }
 
-                // Don't retry other client errors
+                // Other client errors — surface the server's message, or a clear
+                // status-based fallback, never a bare "Unknown error".
                 if (response.status >= 400 && response.status < 500) {
-                    const data = await response.json().catch(() => ({ ok: false, error: "Unknown error" })) as T;
+                    const data = await this.errorData(response) as T;
                     return { ok: false, status: response.status, data, headers: response.headers };
                 }
 
@@ -161,6 +187,12 @@ export class DosyaClient {
                     await response.body?.cancel().catch(() => {});
                     await Bun.sleep(RETRY_DELAYS[attempt]);
                     continue;
+                }
+
+                // A 5xx we won't retry further — normalize to a clear message too.
+                if (response.status >= 500) {
+                    const data = await this.errorData(response) as T;
+                    return { ok: false, status: response.status, data, headers: response.headers };
                 }
 
                 const contentType = response.headers.get("content-type") ?? "";
@@ -208,7 +240,8 @@ export class DosyaClient {
     private unwrap<T>(res: ApiResponse<T>): T {
         if (!res.ok) {
             const err = res.data as { error?: string };
-            throw new ApiError(err?.error ?? `Request failed: ${res.status}`, res.status);
+            const msg = typeof err?.error === "string" && err.error.trim() ? err.error.trim() : httpErrorMessage(res.status);
+            throw new ApiError(msg, res.status);
         }
         return res.data;
     }

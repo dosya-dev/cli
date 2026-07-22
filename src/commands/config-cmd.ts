@@ -11,6 +11,7 @@ Usage:
 Keys:
   api_base              API base URL (default: https://dosya.dev)
   default_workspace     Default workspace ID for commands
+  sync_delta            "true" to enable block-level delta sync uploads (opt-in)
 
 Flags:
   --json, -j            Output as JSON
@@ -18,13 +19,14 @@ Flags:
 Examples:
   dosya config set default_workspace ws_abc123
   dosya config get default_workspace
+  dosya config set sync_delta true
   dosya config path`;
 
 export function configHelp(): void {
     console.log(HELP);
 }
 
-const ALLOWED_KEYS = ["api_base", "default_workspace"] as const;
+const ALLOWED_KEYS = ["api_base", "default_workspace", "sync_delta"] as const;
 type ConfigKey = (typeof ALLOWED_KEYS)[number];
 
 function isAllowedKey(key: string): key is ConfigKey {
@@ -71,6 +73,7 @@ export async function configGet(args: string[], flags: Record<string, string>): 
     } else {
         log(`api_base:           ${config.api_base}`);
         log(`default_workspace:  ${config.default_workspace ?? "(not set)"}`);
+        log(`sync_delta:         ${config.sync_delta ?? "(not set)"}`);
     }
 }
 

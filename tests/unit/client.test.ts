@@ -105,6 +105,122 @@ describe("DosyaClient", () => {
             }
         });
 
+        it("should surface the server's message on 403 (not a generic string)", async () => {
+            const originalFetch = globalThis.fetch;
+            globalThis.fetch = (async () => {
+                return new Response(JSON.stringify({ error: "Free plan allows a maximum of 3 workspaces. Upgrade to create more." }), {
+                    status: 403,
+                    headers: { "content-type": "application/json" },
+                });
+            }) as unknown as typeof fetch;
+
+            try {
+                const client = new DosyaClient("https://dosya.dev", "dos_test");
+                await expect(client.request("/api/workspaces")).rejects.toThrow(
+                    "Free plan allows a maximum of 3 workspaces. Upgrade to create more.",
+                );
+            } finally {
+                globalThis.fetch = originalFetch;
+            }
+        });
+
+        it("should fall back to a generic 403 message when the body has none", async () => {
+            const originalFetch = globalThis.fetch;
+            globalThis.fetch = (async () => {
+                return new Response("", { status: 403 });
+            }) as unknown as typeof fetch;
+
+            try {
+                const client = new DosyaClient("https://dosya.dev", "dos_test");
+                await expect(client.request("/api/secret")).rejects.toThrow("Permission denied");
+            } finally {
+                globalThis.fetch = originalFetch;
+            }
+        });
+
+        it("should keep the re-auth hint on 401 regardless of body", async () => {
+            const originalFetch = globalThis.fetch;
+            globalThis.fetch = (async () => {
+                return new Response(JSON.stringify({ error: "Unauthorized" }), {
+                    status: 401,
+                    headers: { "content-type": "application/json" },
+                });
+            }) as unknown as typeof fetch;
+
+            try {
+                const client = new DosyaClient("https://dosya.dev", "dos_bad");
+                await expect(client.request("/api/me")).rejects.toThrow("dosya auth login");
+            } finally {
+                globalThis.fetch = originalFetch;
+            }
+        });
+
+        it("should surface the server's message on a 4xx via get()", async () => {
+            const originalFetch = globalThis.fetch;
+            globalThis.fetch = (async () => {
+                return new Response(JSON.stringify({ error: "A workspace with that name already exists." }), {
+                    status: 409,
+                    headers: { "content-type": "application/json" },
+                });
+            }) as unknown as typeof fetch;
+
+            try {
+                const client = new DosyaClient("https://dosya.dev", "dos_test");
+                await expect(client.get("/api/workspaces")).rejects.toThrow("A workspace with that name already exists.");
+            } finally {
+                globalThis.fetch = originalFetch;
+            }
+        });
+
+        it("should give a clear status message when a 4xx has no error field", async () => {
+            const originalFetch = globalThis.fetch;
+            globalThis.fetch = (async () => {
+                return new Response(JSON.stringify({ ok: false }), {
+                    status: 404,
+                    headers: { "content-type": "application/json" },
+                });
+            }) as unknown as typeof fetch;
+
+            try {
+                const client = new DosyaClient("https://dosya.dev", "dos_test");
+                await expect(client.get("/api/nope")).rejects.toThrow("Not found (404)");
+            } finally {
+                globalThis.fetch = originalFetch;
+            }
+        });
+
+        it("should give a clear message + base hint for a non-JSON error body (wrong host)", async () => {
+            const originalFetch = globalThis.fetch;
+            globalThis.fetch = (async () => {
+                return new Response("<!doctype html><title>404</title>", {
+                    status: 404,
+                    headers: { "content-type": "text/html" },
+                });
+            }) as unknown as typeof fetch;
+
+            try {
+                const client = new DosyaClient("https://dosya.dev", "dos_test");
+                await expect(client.get("/api/files")).rejects.toThrow("DOSYA_API_BASE");
+            } finally {
+                globalThis.fetch = originalFetch;
+            }
+        });
+
+        it("should give a clear message on a 5xx", async () => {
+            const originalFetch = globalThis.fetch;
+            // POST isn't retried on 5xx, so this resolves immediately.
+            globalThis.fetch = (async () => {
+                return new Response("Internal Server Error", { status: 500, headers: { "content-type": "text/plain" } });
+            }) as unknown as typeof fetch;
+
+            try {
+                const client = new DosyaClient("https://dosya.dev", "dos_test");
+                await expect(client.post("/api/x", {})).rejects.toThrow("Server error (500)");
+            } finally {
+                globalThis.fetch = originalFetch;
+            }
+        });
+
         it("should send JSON body for POST requests", async () => {
             let capturedBody: string = "";
             let capturedHeaders: Record<string, string> = {};
