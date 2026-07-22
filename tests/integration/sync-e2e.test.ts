@@ -106,3 +106,57 @@ describe("sync end-to-end (complex folders, no network)", () => {
         expect(api.paths().has("docs/sub/deep.txt")).toBe(false);
     });
 });
+
+/**
+ * Batching regression: the server caps manifest/commit at 5000 files and
+ * download-manifest at 500. A real /var backup is ~8k files, so the engine
+ * MUST chunk both directions or the whole cycle is rejected. The fake mirrors
+ * those caps (returns "Max N files per request") so an un-batched call fails.
+ */
+describe("sync large trees (server batch caps)", () => {
+    it("pushes >5000 new files in batches (manifest/commit cap = 5000)", async () => {
+        process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "dosya-sync-big-cfg-"));
+        const root = mkdtempSync(join(tmpdir(), "dosya-sync-big-push-"));
+        const api = startFakeSyncApi();
+        api.install();
+        try {
+            const N = 5001; // one past the 5000 cap → forces ≥2 batches
+            for (let i = 0; i < N; i++) writeFileSync(join(root, `f${i}.txt`), `body ${i}`);
+            const client = new DosyaClient(api.base, "dos_test");
+            const pair: SyncPair = {
+                id: "p_big_push", local: root, remoteWorkspaceId: "ws_test", remoteFolderId: null,
+                syncMode: "push", conflictStrategy: "last-write-wins", excludes: [], pollIntervalMs: 15000,
+            };
+            const res = await runCycle(client, pair, false);
+            expect(res.failures).toEqual([]);
+            expect(api.files.size).toBe(N);
+        } finally {
+            api.stop();
+            rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    it("pulls >500 remote files in batches (download-manifest cap = 500)", async () => {
+        process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "dosya-sync-big-cfg2-"));
+        const root = mkdtempSync(join(tmpdir(), "dosya-sync-big-pull-"));
+        const api = startFakeSyncApi();
+        api.install();
+        try {
+            const M = 501; // one past the 500 cap → forces ≥2 download batches
+            for (let i = 0; i < M; i++) api.addRemoteFile(`r${i}.txt`, `cloud ${i}`);
+            const client = new DosyaClient(api.base, "dos_test");
+            const pair: SyncPair = {
+                id: "p_big_pull", local: root, remoteWorkspaceId: "ws_test", remoteFolderId: null,
+                syncMode: "pull", conflictStrategy: "last-write-wins", excludes: [], pollIntervalMs: 15000,
+            };
+            const res = await runCycle(client, pair, false);
+            expect(res.failures).toEqual([]);
+            let present = 0;
+            for (let i = 0; i < M; i++) if (existsSync(join(root, `r${i}.txt`))) present++;
+            expect(present).toBe(M);
+        } finally {
+            api.stop();
+            rmSync(root, { recursive: true, force: true });
+        }
+    });
+});

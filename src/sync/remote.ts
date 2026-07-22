@@ -133,48 +133,62 @@ export class SyncRemote {
         return { files, folders };
     }
 
-    /** Upload brand-new files via manifest → presigned PUT → commit. */
+    /** Upload brand-new files via manifest → presigned PUT → commit, batched. */
     async uploadNew(items: UploadItem[]): Promise<number> {
         if (items.length === 0) return 0;
         const region = await this.getRegion();
 
-        const manifest = await this.req<{
-            uploads: { relPath: string; fileId: string; r2Key: string; name: string; url: string; size: number; folderId: string | null; contentType: string; ext: string | null }[];
-        }>("/api/sync/manifest", {
-            method: "POST",
-            body: {
-                workspace_id: this.workspaceId,
-                folder_id: null,
-                region,
-                files: items.map(i => ({ relPath: i.relPath, name: i.name, size: i.size, folder_id: i.folderId })),
-            },
-        });
+        // The server caps manifest/commit at 5000 files per request, so a large
+        // sync (thousands of new files) must be chunked or it's rejected wholesale.
+        // Committing each batch also means an interrupted run resumes: the server
+        // dedups already-committed files out of the next manifest.
+        const BATCH = 1000;
+        let committed = 0;
 
-        const byRel = new Map(items.map(i => [i.relPath, i]));
-        const commitFiles: { file_id: string; r2_key: string; name: string; size: number; folder_id: string | null; content_type: string; ext: string | null }[] = [];
+        for (let start = 0; start < items.length; start += BATCH) {
+            const slice = items.slice(start, start + BATCH);
 
-        for (const u of manifest.uploads ?? []) {
-            const item = byRel.get(u.relPath);
-            if (!item) continue;
-            // Buffer the file rather than passing the BunFile directly — a
-            // BunFile as a fetch body segfaults the compiled binary (Bun bug),
-            // and a known Content-Length is what R2's presigned PUT expects.
-            const res = await fetch(u.url, {
-                method: "PUT",
-                body: await Bun.file(item.localPath).arrayBuffer(),
-                headers: { "Content-Type": u.contentType },
-                signal: AbortSignal.timeout(getLongTimeout(600_000)),
+            const manifest = await this.req<{
+                uploads: { relPath: string; fileId: string; r2Key: string; name: string; url: string; size: number; folderId: string | null; contentType: string; ext: string | null }[];
+            }>("/api/sync/manifest", {
+                method: "POST",
+                body: {
+                    workspace_id: this.workspaceId,
+                    folder_id: null,
+                    region,
+                    files: slice.map(i => ({ relPath: i.relPath, name: i.name, size: i.size, folder_id: i.folderId })),
+                },
             });
-            if (!res.ok) throw new Error(`R2 PUT failed for ${u.name}: HTTP ${res.status}`);
-            commitFiles.push({ file_id: u.fileId, r2_key: u.r2Key, name: u.name, size: u.size, folder_id: u.folderId, content_type: u.contentType, ext: u.ext });
+
+            const byRel = new Map(slice.map(i => [i.relPath, i]));
+            const commitFiles: { file_id: string; r2_key: string; name: string; size: number; folder_id: string | null; content_type: string; ext: string | null }[] = [];
+
+            for (const u of manifest.uploads ?? []) {
+                const item = byRel.get(u.relPath);
+                if (!item) continue;
+                // Buffer the file rather than passing the BunFile directly — a
+                // BunFile as a fetch body segfaults the compiled binary (Bun bug),
+                // and a known Content-Length is what R2's presigned PUT expects.
+                const res = await fetch(u.url, {
+                    method: "PUT",
+                    body: await Bun.file(item.localPath).arrayBuffer(),
+                    headers: { "Content-Type": u.contentType },
+                    signal: AbortSignal.timeout(getLongTimeout(600_000)),
+                });
+                if (!res.ok) throw new Error(`R2 PUT failed for ${u.name}: HTTP ${res.status}`);
+                commitFiles.push({ file_id: u.fileId, r2_key: u.r2Key, name: u.name, size: u.size, folder_id: u.folderId, content_type: u.contentType, ext: u.ext });
+            }
+
+            if (commitFiles.length > 0) {
+                const commit = await this.req<{ committed: number }>("/api/sync/commit", {
+                    method: "POST",
+                    body: { workspace_id: this.workspaceId, region, files: commitFiles },
+                });
+                committed += commit.committed ?? commitFiles.length;
+            }
         }
 
-        if (commitFiles.length === 0) return 0;
-        const commit = await this.req<{ committed: number }>("/api/sync/commit", {
-            method: "POST",
-            body: { workspace_id: this.workspaceId, region, files: commitFiles },
-        });
-        return commit.committed ?? commitFiles.length;
+        return committed;
     }
 
     /** Upload a new version of an existing file via the upload/init flow. */
@@ -201,11 +215,19 @@ export class SyncRemote {
 
     async downloadUrls(fileIds: string[]): Promise<{ fileId: string; url: string; name: string; size: number }[]> {
         if (fileIds.length === 0) return [];
-        const data = await this.req<{ downloads: { fileId: string; url: string; name: string; size: number }[] }>(
-            "/api/sync/download-manifest",
-            { method: "POST", body: { workspace_id: this.workspaceId, file_ids: fileIds } },
-        );
-        return data.downloads ?? [];
+        // The server caps download-manifest at 500 ids per request, so a large
+        // pull (thousands of files) must be batched or it's rejected wholesale.
+        const BATCH = 500;
+        const out: { fileId: string; url: string; name: string; size: number }[] = [];
+        for (let start = 0; start < fileIds.length; start += BATCH) {
+            const slice = fileIds.slice(start, start + BATCH);
+            const data = await this.req<{ downloads: { fileId: string; url: string; name: string; size: number }[] }>(
+                "/api/sync/download-manifest",
+                { method: "POST", body: { workspace_id: this.workspaceId, file_ids: slice } },
+            );
+            out.push(...(data.downloads ?? []));
+        }
+        return out;
     }
 
     /** Which of these chunk hashes the workspace does NOT already have. */

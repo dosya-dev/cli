@@ -118,6 +118,8 @@ export function startFakeSyncApi(): FakeSyncApi {
             // ── Manifest (new-file upload, step 1) ──
             if (method === "POST" && path === "/api/sync/manifest") {
                 const body = await req.json() as { files: { relPath: string; name: string; size: number; folder_id: string | null }[] };
+                // Mirror the real server cap (src/pages/api/sync/manifest.ts).
+                if (body.files.length > 5000) return json({ ok: false, error: "Max 5000 files per request" }, 400);
                 const uploads = body.files.map(f => {
                     const fileId = id("file_");
                     return {
@@ -132,6 +134,8 @@ export function startFakeSyncApi(): FakeSyncApi {
             // ── Commit ──
             if (method === "POST" && path === "/api/sync/commit") {
                 const body = await req.json() as { files: { file_id: string; name: string; size: number; folder_id: string | null; content_type: string; ext: string | null }[] };
+                // Mirror the real server cap (src/pages/api/sync/commit.ts).
+                if (body.files.length > 5000) return json({ ok: false, error: "Max 5000 files per commit" }, 400);
                 for (const f of body.files) {
                     files.set(f.file_id, {
                         id: f.file_id, name: f.name, folder_id: f.folder_id, size_bytes: f.size,
@@ -144,6 +148,8 @@ export function startFakeSyncApi(): FakeSyncApi {
             // ── Download manifest ──
             if (method === "POST" && path === "/api/sync/download-manifest") {
                 const body = await req.json() as { file_ids: string[] };
+                // Mirror the real server cap (src/pages/api/sync/download-manifest.ts).
+                if (body.file_ids.length > 500) return json({ ok: false, error: "Max 500 files per request" }, 400);
                 const downloads = body.file_ids.map(fid => {
                     const f = files.get(fid)!;
                     return { fileId: fid, url: `${base}/r2get/${fid}`, name: f.name, size: f.size_bytes };
