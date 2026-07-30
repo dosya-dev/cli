@@ -23,14 +23,14 @@ export async function uninstall(flags: Record<string, string>): Promise<void> {
 
     const isForce = flags.force !== undefined;
 
-    // process.execPath is the bun interpreter when running from source —
+    // process.execPath is the bun interpreter when running from source -
     // deleting it would remove the user's Bun installation.
     const compiled = isCompiledBinary();
     const binaryPath = compiled ? process.execPath : null;
     const configDir = dirname(getConfigPath());
 
     if (!compiled) {
-        log("Running from source — only the config directory will be removed.");
+        log("Running from source - only the config directory will be removed.");
     }
 
     if (!isForce) {
@@ -67,7 +67,7 @@ export async function uninstall(flags: Record<string, string>): Promise<void> {
         rmSync(binaryPath, { force: true });
         log(`Removed ${binaryPath}`);
     } catch {
-        console.error(`Could not remove ${binaryPath} — try: sudo rm ${binaryPath}`);
+        console.error(`Could not remove ${binaryPath} - try: sudo rm ${binaryPath}`);
         process.exit(EXIT.ERROR);
     }
 

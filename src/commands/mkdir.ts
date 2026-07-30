@@ -7,7 +7,7 @@ const HELP = `Create a folder on dosya.dev.
 
 Usage: dosya mkdir <path> [flags]
 
-<path> may be nested (a/b/c) — every missing segment is created. It may carry a
+<path> may be nested (a/b/c) - every missing segment is created. It may carry a
 workspace prefix (ws_id:reports/2026).
 
 Flags:

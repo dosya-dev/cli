@@ -26,7 +26,7 @@ function run(over: Partial<ReconcileInput>): ReturnType<typeof reconcile> {
     });
 }
 
-describe("reconcile — basic cases", () => {
+describe("reconcile - basic cases", () => {
     it("local-only file → upload-new", () => {
         const acts = run({ local: new Map([["a.txt", local()]]) });
         expect(acts).toEqual([{ kind: "upload-new", relPath: "a.txt", localPath: "a.txt", folderId: null }]);
@@ -47,7 +47,7 @@ describe("reconcile — basic cases", () => {
     });
 });
 
-describe("reconcile — deletions", () => {
+describe("reconcile - deletions", () => {
     it("local deleted, remote unchanged → delete-remote", () => {
         const acts = run({ remote: new Map([["r1", remoteFile()]]), state: state({ r1: rec() }) });
         expect(acts).toEqual([{ kind: "delete-remote", remoteId: "r1", relPath: "a.txt" }]);
@@ -69,7 +69,7 @@ describe("reconcile — deletions", () => {
     });
 });
 
-describe("reconcile — both sides changed", () => {
+describe("reconcile - both sides changed", () => {
     const bothChanged = {
         local: new Map([["a.txt", local({ mtimeMs: 150000 })]]),
         remote: new Map([["r1", remoteFile({ updatedAt: 200, version: 2 })]]),
@@ -96,7 +96,7 @@ describe("reconcile — both sides changed", () => {
     });
 });
 
-describe("reconcile — mode gating", () => {
+describe("reconcile - mode gating", () => {
     it("push drops download and delete-local", () => {
         const acts = run({
             remote: new Map([["r2", remoteFile({ id: "r2", relPath: "b.txt" })]]),   // would download-new
@@ -126,7 +126,7 @@ describe("reconcile — mode gating", () => {
     });
 });
 
-describe("reconcile — deletion safety valve", () => {
+describe("reconcile - deletion safety valve", () => {
     it("suppresses all deletes when the local scan is incomplete", () => {
         const acts = run({ remote: new Map([["r1", remoteFile()]]), state: state({ r1: rec() }), localIncomplete: true });
         expect(acts).toEqual([]);

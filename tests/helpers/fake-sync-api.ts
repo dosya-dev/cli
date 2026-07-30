@@ -1,5 +1,5 @@
 /**
- * In-memory fake of the dosya sync API — enough of it to drive the real CLI
+ * In-memory fake of the dosya sync API - enough of it to drive the real CLI
  * sync engine (whole-file path) end-to-end with no network or credentials.
  *
  * Implements: workspace region, snapshot, manifest→R2 PUT→commit, download-
@@ -35,6 +35,8 @@ export interface FakeSyncApi {
     paths: () => Map<string, string>;   // relPath -> fileId
     /** Test helper: put a file directly into the remote (simulates a web upload). */
     addRemoteFile: (relPath: string, bytes: string) => string;
+    /** Test helper: change an existing remote file's content (bumps updated_at + version). */
+    updateRemoteFile: (fileId: string, bytes: string) => void;
     addRemoteFolderPath: (relPath: string) => string;
 }
 
@@ -91,7 +93,7 @@ export function startFakeSyncApi(): FakeSyncApi {
             if (process.env.FAKE_DEBUG) console.error(`[fake] ${method} ${path}`);
 
             // ── R2 stand-ins ──
-            // A PUT to /r2fail always 500s — lets a test assert that one bad file
+            // A PUT to /r2fail always 500s - lets a test assert that one bad file
             // is reported but doesn't abort the rest of the batch.
             if (method === "PUT" && path === "/r2fail") {
                 return new Response("boom", { status: 500 });
@@ -148,13 +150,15 @@ export function startFakeSyncApi(): FakeSyncApi {
                 const body = await req.json() as { files: { file_id: string; name: string; size: number; folder_id: string | null; content_type: string; ext: string | null }[] };
                 // Mirror the real server cap (src/pages/api/sync/commit.ts).
                 if (body.files.length > 5000) return json({ ok: false, error: "Max 5000 files per commit" }, 400);
+                // Like the real server: one `now` per request, echoed as committed_at.
+                const t = ++clock;
                 for (const f of body.files) {
                     files.set(f.file_id, {
                         id: f.file_id, name: f.name, folder_id: f.folder_id, size_bytes: f.size,
-                        mime_type: f.content_type, extension: f.ext, updated_at: ++clock, current_version: 1,
+                        mime_type: f.content_type, extension: f.ext, updated_at: t, current_version: 1,
                     });
                 }
-                return json({ ok: true, committed: body.files.length });
+                return json({ ok: true, committed: body.files.length, committed_at: t });
             }
 
             // ── Download manifest ──
@@ -167,6 +171,18 @@ export function startFakeSyncApi(): FakeSyncApi {
                     return { fileId: fid, url: `${base}/r2get/${fid}`, name: f.name, size: f.size_bytes };
                 });
                 return json({ ok: true, downloads });
+            }
+
+            // ── Folder batch create (idempotent) ──
+            if (method === "POST" && path === "/api/folders/batch") {
+                const body = await req.json() as { folders: { name: string; parent_id: string | null }[] };
+                const out = body.folders.map(entry => {
+                    let f = findFolder(entry.parent_id ?? null, entry.name);
+                    const created = !f;
+                    if (!f) { f = { id: id("fld_"), name: entry.name, parent_id: entry.parent_id ?? null }; folders.set(f.id, f); }
+                    return { name: entry.name, parent_id: entry.parent_id ?? null, id: f.id, created };
+                });
+                return json({ ok: true, folders: out });
             }
 
             // ── Folder create (idempotent, single segment) ──
@@ -212,10 +228,12 @@ export function startFakeSyncApi(): FakeSyncApi {
                 const bytes = new Uint8Array(await req.arrayBuffer());
                 const fid = s.file_id ?? id("file_");
                 objects.set(fid, bytes);
+                const t = ++clock;
                 const existing = files.get(fid);
-                if (existing) { existing.current_version += 1; existing.size_bytes = bytes.byteLength; existing.updated_at = ++clock; }
-                else files.set(fid, { id: fid, name: s.name, folder_id: s.folder_id, size_bytes: bytes.byteLength, mime_type: s.content_type, extension: s.ext, updated_at: ++clock, current_version: 1 });
-                return json({ ok: true, file: { id: fid, name: s.name, size_bytes: bytes.byteLength, version: files.get(fid)!.current_version } });
+                if (existing) { existing.current_version += 1; existing.size_bytes = bytes.byteLength; existing.updated_at = t; }
+                else files.set(fid, { id: fid, name: s.name, folder_id: s.folder_id, size_bytes: bytes.byteLength, mime_type: s.content_type, extension: s.ext, updated_at: t, current_version: 1 });
+                // created_at mirrors the real handler: it equals the row's updated_at.
+                return json({ ok: true, file: { id: fid, name: s.name, size_bytes: bytes.byteLength, version: files.get(fid)!.current_version, created_at: t } });
             }
 
             return json({ ok: false, error: `unhandled ${method} ${path}` }, 404);
@@ -241,6 +259,15 @@ export function startFakeSyncApi(): FakeSyncApi {
             objects.set(fid, bytes);
             files.set(fid, { id: fid, name, folder_id: folderId, size_bytes: bytes.byteLength, mime_type: "text/plain", extension: name.includes(".") ? name.slice(name.lastIndexOf(".")) : null, updated_at: ++clock, current_version: 1 });
             return fid;
+        },
+        updateRemoteFile(fileId: string, body: string) {
+            const f = files.get(fileId);
+            if (!f) throw new Error(`updateRemoteFile: no such file ${fileId}`);
+            const bytes = new TextEncoder().encode(body);
+            objects.set(fileId, bytes);
+            f.size_bytes = bytes.byteLength;
+            f.updated_at = ++clock;
+            f.current_version += 1;
         },
         addRemoteFolderPath: (relPath: string) => ensureFolderPath(relPath),
     };

@@ -34,24 +34,24 @@ export class ApiError extends Error {
  * Human-readable fallback for an HTTP status, used only when the server did not
  * send its own `error` message. The server's message always wins; this exists so
  * that a bare or non-JSON error response never surfaces as "Unknown error" or a
- * cryptic number — the user always gets something they can act on.
+ * cryptic number - the user always gets something they can act on.
  */
 export function httpErrorMessage(status: number): string {
     switch (status) {
-        case 400: return "Bad request — the server rejected the input (400).";
+        case 400: return "Bad request - the server rejected the input (400).";
         case 401: return "Authentication failed. Run 'dosya auth login' to re-authenticate.";
         case 402: return "This action requires a paid plan (402).";
         case 403: return "Permission denied. You don't have access to this resource (403).";
         case 404: return "Not found (404).";
         case 405: return "That action isn't allowed here (405).";
         case 408: return "The server timed out waiting for the request (408). Try again.";
-        case 409: return "Conflict — the resource's current state prevents this (409).";
+        case 409: return "Conflict - the resource's current state prevents this (409).";
         case 410: return "This resource is no longer available (410).";
         case 413: return "Too large (413).";
         case 415: return "Unsupported file or content type (415).";
         case 422: return "The request was rejected as invalid (422).";
-        case 423: return "Locked — unlock it first (423).";
-        case 429: return "Rate limited — too many requests. Try again shortly (429).";
+        case 423: return "Locked - unlock it first (423).";
+        case 429: return "Rate limited - too many requests. Try again shortly (429).";
         case 500: return "Server error (500). Please try again.";
         case 502: return "The server is unreachable right now (502). Please try again.";
         case 503: return "The service is temporarily unavailable (503). Please try again.";

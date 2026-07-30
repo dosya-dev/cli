@@ -1,7 +1,7 @@
 import { describe, it, expect } from "bun:test";
 import { parseArgs } from "../../src/parse-args";
 
-describe("parseArgs — new flags and repeatable flags", () => {
+describe("parseArgs - new flags and repeatable flags", () => {
     it("accumulates repeated --exclude into multi", () => {
         const r = parseArgs(["sync", "add", ".", "ws_1:", "--exclude", "*.tmp", "--exclude", "node_modules"]);
         expect(r.multi.exclude).toEqual(["*.tmp", "node_modules"]);

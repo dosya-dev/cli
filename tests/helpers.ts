@@ -18,7 +18,7 @@ export function getApiBase(): string {
  */
 async function probeLiveApi(): Promise<boolean> {
     if (!process.env.DOSYA_TEST_API_KEY) {
-        console.warn("[tests] DOSYA_TEST_API_KEY not set — skipping integration tests.");
+        console.warn("[tests] DOSYA_TEST_API_KEY not set - skipping integration tests.");
         return false;
     }
     try {
@@ -29,7 +29,7 @@ async function probeLiveApi(): Promise<boolean> {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return true;
     } catch (err) {
-        console.warn(`[tests] ${getApiBase()} unreachable (${(err as Error).message}) — skipping integration tests.`);
+        console.warn(`[tests] ${getApiBase()} unreachable (${(err as Error).message}) - skipping integration tests.`);
         return false;
     }
 }

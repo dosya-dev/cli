@@ -10,10 +10,10 @@ function withDeadline<T>(promise: Promise<T>, ms: number): Promise<T | "TIMED_OU
 }
 
 /**
- * `parseInt("abc")` is NaN, and `new Semaphore(NaN)` never granted a slot —
+ * `parseInt("abc")` is NaN, and `new Semaphore(NaN)` never granted a slot -
  * `dosya upload ./dir -r --parallel abc` hung forever with no output.
  */
-describe("Semaphore — invalid limits must not deadlock", () => {
+describe("Semaphore - invalid limits must not deadlock", () => {
     for (const bad of [NaN, 0, -1, 1.5, Infinity]) {
         it(`rejects ${bad} instead of hanging`, () => {
             expect(() => new Semaphore(bad)).toThrow(RangeError);
@@ -21,7 +21,7 @@ describe("Semaphore — invalid limits must not deadlock", () => {
     }
 });
 
-describe("Semaphore — normal operation", () => {
+describe("Semaphore - normal operation", () => {
     it("grants up to the limit immediately", async () => {
         const sem = new Semaphore(2);
         expect(await withDeadline(sem.acquire(), 200)).not.toBe("TIMED_OUT");

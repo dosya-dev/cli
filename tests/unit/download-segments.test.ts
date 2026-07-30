@@ -12,10 +12,10 @@ function makeSegments(n: number): Seg[] {
 /**
  * Regression: `Promise.all` rejects on the first failure while its siblings are
  * still transferring. Restarting a segment that still has a live writer lets
- * that writer call writeSync() on an fd the caller has already closed — EBADF,
+ * that writer call writeSync() on an fd the caller has already closed - EBADF,
  * or a write into a recycled descriptor.
  */
-describe("runSegmentedDownload — no orphaned writers", () => {
+describe("runSegmentedDownload - no orphaned writers", () => {
     it("waits for aborted segments to settle before restarting them", async () => {
         const segments = makeSegments(4);
         const live = new Map<number, number>();
@@ -82,7 +82,7 @@ describe("runSegmentedDownload — no orphaned writers", () => {
     });
 });
 
-describe("runSegmentedDownload — completion and refresh limits", () => {
+describe("runSegmentedDownload - completion and refresh limits", () => {
     it("returns once every segment is done", async () => {
         const segments = makeSegments(3);
         await runSegmentedDownload({

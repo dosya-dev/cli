@@ -46,7 +46,7 @@ export function debug(message: string): void {
 // Written to stderr so it never corrupts `--json` (stdout) and can be
 // redirected independently. On a TTY it rewrites one line in place; when
 // piped (e.g. the sync daemon's log file) callers should emit discrete
-// milestone lines instead — `progress()` no-ops there so logs stay clean.
+// milestone lines instead - `progress()` no-ops there so logs stay clean.
 
 let lastProgressWidth = 0;
 
@@ -226,7 +226,7 @@ export function fatalError(err: unknown): never {
         : err instanceof NetworkError ? EXIT.NETWORK
         : EXIT.ERROR;
 
-    // Message first, then the stack — same ordering as the top-level handler
+    // Message first, then the stack - same ordering as the top-level handler
     console.error(`error: ${message}`);
     if (debugMode && err instanceof Error && err.stack) {
         console.error(err.stack);

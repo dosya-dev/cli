@@ -26,7 +26,7 @@ const json = (body: unknown, status: number, headers: Record<string, string> = {
         headers: { "content-type": "application/json", ...headers },
     });
 
-describe("DosyaClient — retry safety", () => {
+describe("DosyaClient - retry safety", () => {
     it("retries GET on 5xx", async () => {
         const calls = mockFetch([
             () => json({ error: "boom" }, 500),
@@ -40,7 +40,7 @@ describe("DosyaClient — retry safety", () => {
         expect(calls.length).toBe(2);
     });
 
-    it("does NOT retry POST on 5xx — a replayed invite sends duplicates", async () => {
+    it("does NOT retry POST on 5xx - a replayed invite sends duplicates", async () => {
         const calls = mockFetch([() => json({ error: "boom" }, 500)]);
 
         const client = new DosyaClient("https://api.dosya.dev", "dos_test");
@@ -50,7 +50,7 @@ describe("DosyaClient — retry safety", () => {
         expect(calls.length).toBe(1);
     });
 
-    it("does NOT retry DELETE on 5xx — a second delete is a permanent delete", async () => {
+    it("does NOT retry DELETE on 5xx - a second delete is a permanent delete", async () => {
         const calls = mockFetch([() => json({ error: "boom" }, 500)]);
 
         const client = new DosyaClient("https://api.dosya.dev", "dos_test");
@@ -73,7 +73,7 @@ describe("DosyaClient — retry safety", () => {
     });
 });
 
-describe("DosyaClient — 429 handling", () => {
+describe("DosyaClient - 429 handling", () => {
     it("honours Retry-After and then succeeds", async () => {
         const calls = mockFetch([
             () => json({ error: "slow down" }, 429, { "retry-after": "0" }),
@@ -101,7 +101,7 @@ describe("DosyaClient — 429 handling", () => {
     });
 });
 
-describe("DosyaClient — credential scope", () => {
+describe("DosyaClient - credential scope", () => {
     it("sends the API key to the configured host", async () => {
         let headers: Record<string, string> = {};
         globalThis.fetch = (async (_url: string, init: any) => {
@@ -129,7 +129,7 @@ describe("DosyaClient — credential scope", () => {
     });
 });
 
-describe("DosyaClient — error typing", () => {
+describe("DosyaClient - error typing", () => {
     it("throws ApiError carrying the status code", async () => {
         mockFetch([() => json({ error: "Not found" }, 404)]);
 

@@ -9,8 +9,8 @@ import type { SyncProgress } from "../../src/sync/types";
 import { startFakeSyncApi, type FakeSyncApi } from "../helpers/fake-sync-api";
 
 /**
- * End-to-end sync of a deliberately complex local tree — deep nesting, spaces,
- * unicode, dotfiles, empty dirs — against an in-memory fake of the sync API.
+ * End-to-end sync of a deliberately complex local tree - deep nesting, spaces,
+ * unicode, dotfiles, empty dirs - against an in-memory fake of the sync API.
  * Exercises the real engine: scan → snapshot → reconcile → executor.
  */
 describe("sync end-to-end (complex folders, no network)", () => {
@@ -60,7 +60,7 @@ describe("sync end-to-end (complex folders, no network)", () => {
         for (const p of ["a.txt", ".hidden", "docs/readme.md", "docs/sub/deep.txt", "docs/sub/with space.txt", "data/café.txt"]) {
             expect(remote.has(p)).toBe(true);
         }
-        // Empty dirs are not synced (files-only) — documents that limitation.
+        // Empty dirs are not synced (files-only) - documents that limitation.
         expect([...api.folders.values()].some(f => f.name === "empty")).toBe(false);
         // Nested hierarchy is real (sub's parent is docs).
         const docs = [...api.folders.values()].find(f => f.name === "docs" && f.parent_id === null);
@@ -102,7 +102,7 @@ describe("sync end-to-end (complex folders, no network)", () => {
     it("uploads a new version when a local file changes", async () => {
         const byPath = api.paths();
         const fid = byPath.get("docs/readme.md")!;
-        writeFileSync(join(root, "docs/readme.md"), "readme v2 — longer content");
+        writeFileSync(join(root, "docs/readme.md"), "readme v2 - longer content");
         const res = await runCycle(client, pair, false);
         expect(res.failures).toEqual([]);
         expect(api.files.get(fid)!.current_version).toBeGreaterThanOrEqual(2);
@@ -113,6 +113,39 @@ describe("sync end-to-end (complex folders, no network)", () => {
         const res = await runCycle(client, pair, false);
         expect(res.failures).toEqual([]);
         expect(api.paths().has("docs/sub/deep.txt")).toBe(false);
+    });
+
+    it("a cycle WITH actions also fetches the snapshot once (state built from results)", async () => {
+        write("fresh-upload.txt", "new content");
+        api.counts.snapshot = 0;
+        const res = await runCycle(client, pair, false);
+        expect(res.failures).toEqual([]);
+        expect(res.applied).toBe(1);
+        // The old engine re-fetched a full snapshot in finalize (2 per cycle);
+        // state is now built from the upload results instead.
+        expect(api.counts.snapshot).toBe(1);
+        // And the state it built is exact: the next run is a clean no-op.
+        const res2 = await runCycle(client, pair, false);
+        expect(res2.applied).toBe(0);
+        expect(res2.failures).toEqual([]);
+    });
+
+    it("a failed download is retried next cycle (state must not freeze it)", async () => {
+        const fid = api.paths().get("a.txt")!;
+        api.updateRemoteFile(fid, "v2 from cloud");
+        api.objects.delete(fid); // download will 404 this cycle
+
+        const res = await runCycle(client, pair, false);
+        expect(res.failures).toHaveLength(1);
+        expect(readFileSync(join(root, "a.txt"), "utf8")).toBe("root file"); // unchanged
+
+        // Restore the object; the carried-forward state record must retry the
+        // download. (The old read-back finalize recorded the NEW remote metadata
+        // against the OLD local file - freezing the divergence forever.)
+        api.objects.set(fid, new TextEncoder().encode("v2 from cloud"));
+        const res2 = await runCycle(client, pair, false);
+        expect(res2.failures).toEqual([]);
+        expect(readFileSync(join(root, "a.txt"), "utf8")).toBe("v2 from cloud");
     });
 });
 

@@ -7,7 +7,10 @@ export interface ReconcileInput {
     state: SyncPairState;
     mode: SyncMode;
     conflictStrategy: ConflictStrategy;
+    /** A local dir failed to read - suppress deletions (see the safety valve). */
     localIncomplete: boolean;
+    /** The remote snapshot was truncated - suppress deletions for the same reason. */
+    remoteIncomplete?: boolean;
 }
 
 function remoteChanged(r: RemoteFile, rec: SyncFileRecord): boolean {
@@ -59,7 +62,7 @@ function allowedInMode(kind: SyncAction["kind"], mode: SyncMode): boolean {
 
 /**
  * Three-way reconcile: local scan vs remote snapshot vs last-synced state.
- * Pure — no I/O. Emits the actions the executor should apply.
+ * Pure - no I/O. Emits the actions the executor should apply.
  */
 export function reconcile(input: ReconcileInput): SyncAction[] {
     const { state, mode, conflictStrategy } = input;
@@ -85,7 +88,7 @@ export function reconcile(input: ReconcileInput): SyncAction[] {
             if (localAtOld && !localFiles.has(remote.relPath)) {
                 actions.push({ kind: "move-local", fromPath: oldPath, toPath: remote.relPath, remoteId });
             } else if (!localAtOld && !localFiles.has(remote.relPath)) {
-                // local gone entirely — pull it back at the new path
+                // local gone entirely - pull it back at the new path
                 actions.push({ kind: "download-new", relPath: remote.relPath, remoteId, localPath: remote.relPath, size: remote.size });
             }
             processedPaths.add(oldPath);
@@ -123,7 +126,7 @@ export function reconcile(input: ReconcileInput): SyncAction[] {
             }
             processedPaths.add(oldPath);
         }
-        // !remote && !local: both gone — nothing to do.
+        // !remote && !local: both gone - nothing to do.
     }
 
     // 2) Untracked local files.
@@ -131,7 +134,7 @@ export function reconcile(input: ReconcileInput): SyncAction[] {
         if (processedPaths.has(rel)) continue;
         const remoteHere = remoteByPath.get(rel);
         if (remoteHere && !processedRemoteIds.has(remoteHere.id)) {
-            // Both sides introduced a file at the same path — treat as a conflict.
+            // Both sides introduced a file at the same path - treat as a conflict.
             actions.push(resolveBothChanged(rel, remoteHere.id, remoteHere, entry, mode, conflictStrategy));
             processedRemoteIds.add(remoteHere.id);
         } else {
@@ -150,12 +153,12 @@ export function reconcile(input: ReconcileInput): SyncAction[] {
     // 4) Mode gating.
     const gated = actions.filter(a => allowedInMode(a.kind, mode));
 
-    // 5) Deletion safety valve — never let a transient read failure or a
+    // 5) Deletion safety valve - never let a transient read failure or a
     //    suspicious mass-delete wipe a side.
     const deleteCount = gated.filter(a => a.kind === "delete-local" || a.kind === "delete-remote").length;
     const storedCount = Object.keys(state.files).length;
     const massDelete = storedCount > 10 && deleteCount > 5 && deleteCount > storedCount * 0.5;
-    if (input.localIncomplete || massDelete) {
+    if (input.localIncomplete || input.remoteIncomplete || massDelete) {
         return gated.filter(a => a.kind !== "delete-local" && a.kind !== "delete-remote");
     }
     return gated;

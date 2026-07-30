@@ -6,7 +6,7 @@ import { debug } from "./output";
 /**
  * Resumable multipart upload.
  *
- * A single streamed PUT cannot be retried — a ReadableStream is consumed once —
+ * A single streamed PUT cannot be retried - a ReadableStream is consumed once -
  * so a large upload that failed at 90% used to restart from zero. The API
  * exposes a part-based protocol where every part is idempotent, which makes
  * both per-part retry and resume-across-runs possible.
@@ -25,6 +25,8 @@ export interface UploadedFile {
     name: string;
     size_bytes: number;
     version: number;
+    /** Server row timestamp (== the row's updated_at); absent on older servers. */
+    created_at?: number;
 }
 
 interface StatusResponse {
@@ -65,7 +67,7 @@ function sidecarPath(filePath: string): string {
 /**
  * Load a resumable session for this exact file.
  *
- * Size and mtime must both match — resuming against edited content would
+ * Size and mtime must both match - resuming against edited content would
  * assemble a corrupt object from parts of two different files.
  */
 export function loadUploadSession(filePath: string, size: number): UploadSidecar | null {
@@ -158,7 +160,7 @@ export interface MultipartOptions {
     /**
      * Extra headers for the API-side calls (parts + complete). The sync engine
      * passes `X-Dosya-Sync: 1` so a large sync upload's `file_uploaded` event is
-     * suppressed like the batch path — otherwise every big file spams activity.
+     * suppressed like the batch path - otherwise every big file spams activity.
      */
     headers?: Record<string, string>;
 }
@@ -208,7 +210,7 @@ export async function uploadMultipart(opts: MultipartOptions): Promise<UploadedF
             const data = new Uint8Array(await file.slice(start, end).arrayBuffer());
 
             // A Uint8Array body is replayable, so the client's 5xx/429 retries
-            // apply here — unlike the single streamed PUT.
+            // apply here - unlike the single streamed PUT.
             const res = await client.request<PartResponse>(`${resumable.part_upload_url}/${partNumber}`, {
                 method: "PUT",
                 rawBody: data,
@@ -235,7 +237,7 @@ export async function uploadMultipart(opts: MultipartOptions): Promise<UploadedF
                     }
                     debug(`Part ${partNumber} verified (md5 ${local})`);
                 } else {
-                    debug(`Part ${partNumber} etag is opaque — skipping per-part verification`);
+                    debug(`Part ${partNumber} etag is opaque - skipping per-part verification`);
                 }
             }
 

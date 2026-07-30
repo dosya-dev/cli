@@ -1,6 +1,6 @@
 # dosya cli
 
-The official command-line interface for [dosya.dev](https://dosya.dev) — manage your files from the terminal.
+The official command-line interface for [dosya.dev](https://dosya.dev) - manage your files from the terminal.
 
 ## Install
 
@@ -119,7 +119,7 @@ dosya download <id> --no-verify             # Skip the content-integrity check
 dosya download <id> -o - | tar xz           # Stream to stdout for pipelines
 ```
 
-Interrupted downloads resume automatically — re-run the same command.
+Interrupted downloads resume automatically - re-run the same command.
 
 Downloaded content is verified against the origin's ETag (MD5, or the S3
 composite form for multipart objects), so silent corruption is caught rather
@@ -167,7 +167,7 @@ cloud deletions) · `pull-safe` (download only, never delete locally).
 
 **Conflicts:** `--conflict last-write-wins` (default) keeps the newer side;
 `--conflict keep-both` preserves the local version as `<name> (conflicted copy).<ext>`
-and pulls the remote to the original name — both sides are kept, nothing is lost.
+and pulls the remote to the original name - both sides are kept, nothing is lost.
 A safety valve suppresses deletions when the local scan is incomplete or a
 suspicious mass-delete is detected.
 
@@ -316,16 +316,16 @@ partial success.
 
 ## Features
 
-- **Resumable uploads and downloads** — Both survive Ctrl+C and network loss;
+- **Resumable uploads and downloads** - Both survive Ctrl+C and network loss;
   re-running the same command continues from where it stopped
-- **Verified downloads** — Content checked against the origin ETag, not just size
-- **Parallel operations** — Configurable concurrency for uploads and downloads
-- **Retry logic** — Exponential backoff, `Retry-After` aware, and applied only
+- **Verified downloads** - Content checked against the origin ETag, not just size
+- **Parallel operations** - Configurable concurrency for uploads and downloads
+- **Retry logic** - Exponential backoff, `Retry-After` aware, and applied only
   to requests that are safe to replay
-- **Verified self-update** — `dosya upgrade` checks a published SHA-256 before
+- **Verified self-update** - `dosya upgrade` checks a published SHA-256 before
   replacing the binary
-- **Cross-platform** — macOS, Linux, Windows binaries
-- **Scripting-friendly** — `--json` output mode and meaningful exit codes
+- **Cross-platform** - macOS, Linux, Windows binaries
+- **Scripting-friendly** - `--json` output mode and meaningful exit codes
 
 ## Development
 
@@ -341,7 +341,7 @@ Integration tests need `DOSYA_TEST_API_KEY` and (optionally)
 
 ## Transparency
 
-Every dosya.dev client is source-available. Your files are yours — this repository lets
+Every dosya.dev client is source-available. Your files are yours - this repository lets
 you verify exactly what the app sends to and receives from our servers: what gets
 uploaded, what metadata travels with it, and what comes back. If a claim we make about
 privacy or sync behavior can't be verified in this code, open an issue and call it out.
@@ -373,7 +373,7 @@ public issue.
 
 | Repository | What it is | License |
 |---|---|---|
-| [desktop](https://github.com/dosya-dev/desktop) | Desktop client — sync, upload, manage | Source-available |
+| [desktop](https://github.com/dosya-dev/desktop) | Desktop client - sync, upload, manage | Source-available |
 | [cli](https://github.com/dosya-dev/cli) | Command-line interface | Source-available |
 | [app.dosya.dev](https://github.com/dosya-dev/app.dosya.dev) | Web application | Source-available |
 | [shared](https://github.com/dosya-dev/shared) | Shared TypeScript types & utilities | Source-available |

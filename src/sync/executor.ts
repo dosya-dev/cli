@@ -17,10 +17,27 @@ function resolveParallel(raw: string | undefined): number {
     return Math.min(16, Math.floor(n));
 }
 
+/**
+ * What actually happened this cycle, with the server's authoritative metadata
+ * for every successful transfer. The engine builds the next "last synced"
+ * state from this instead of re-scanning + re-fetching a full snapshot.
+ */
+export interface SyncResults {
+    uploadedNew: { relPath: string; fileId: string; name: string; folderId: string | null; size: number; updatedAt: number | null; version: number }[];
+    uploadedVersion: { remoteId: string; size: number; updatedAt: number | null; version: number }[];
+    /** Successful downloads (incl. keep-both conflict pulls), local side statted post-write. */
+    downloaded: { remoteId: string; relPath: string; mtimeMs: number; size: number }[];
+    movedLocal: { remoteId: string; fromPath: string; toPath: string }[];
+    deletedRemoteIds: string[];
+    /** remoteIds whose action failed - their previous state record is carried forward so the action retries. */
+    failedRemoteIds: string[];
+}
+
 export interface ApplyResult {
     applied: number;
     conflicts: number;
     failures: { action: string; error: string }[];
+    results: SyncResults;
 }
 
 /** The parent path of a root-relative file path ("" for a root-level file). */
@@ -80,6 +97,59 @@ async function ensureRemoteFolder(
 }
 
 /**
+ * Pre-create every remote folder the upload actions need, in ONE batched pass
+ * (level by level so each parent is resolved before its children), populating
+ * `cache`. This replaces thousands of sequential per-folder POSTs on a first
+ * backup (~48 min for 29k folders) with a handful of batch requests (~1s). Any
+ * folder the batch can't resolve simply falls back to lazy per-item creation.
+ */
+async function prewarmFolders(
+    remote: SyncRemote,
+    rootFolderId: string | null,
+    cache: Map<string, string>,
+    parentPaths: Set<string>,
+): Promise<void> {
+    // Every ancestor path that isn't already known, grouped by depth.
+    const needed = new Set<string>();
+    for (const path of parentPaths) {
+        let acc = "";
+        for (const seg of path.split("/")) {
+            acc = acc ? `${acc}/${seg}` : seg;
+            if (!cache.has(acc)) needed.add(acc);
+        }
+    }
+    if (needed.size === 0) return;
+
+    const byDepth = new Map<number, string[]>();
+    for (const p of needed) {
+        const d = p.split("/").length;
+        const list = byDepth.get(d) ?? [];
+        list.push(p);
+        byDepth.set(d, list);
+    }
+
+    for (const depth of [...byDepth.keys()].sort((a, b) => a - b)) {
+        const items: { path: string; name: string; parentId: string | null }[] = [];
+        for (const p of byDepth.get(depth)!) {
+            const slash = p.lastIndexOf("/");
+            const parentPath = slash === -1 ? "" : p.slice(0, slash);
+            // Skip if the parent didn't resolve (a shallower batch failed) - the
+            // lazy path will create it. Root-level folders (parentPath "") use
+            // the pair's root folder id.
+            if (parentPath !== "" && !cache.has(parentPath)) continue;
+            const parentId = parentPath === "" ? rootFolderId : cache.get(parentPath)!;
+            items.push({ path: p, name: slash === -1 ? p : p.slice(slash + 1), parentId });
+        }
+        if (items.length === 0) continue;
+        const created = await remote.createFoldersBatch(items.map(it => ({ name: it.name, parentId: it.parentId })));
+        for (const it of items) {
+            const id = created.get(`${it.parentId ?? "null"}|${it.name}`);
+            if (id) cache.set(it.path, id);
+        }
+    }
+}
+
+/**
  * Apply a reconciled action list. Folders are created as needed for uploads;
  * downloads mkdir -p locally and write atomically. Per-action failures are
  * collected rather than aborting the whole cycle.
@@ -94,6 +164,10 @@ export async function applyActions(
     const failures: { action: string; error: string }[] = [];
     let applied = 0;
     const conflicts = actions.filter(a => a.kind === "conflict").length;
+    const results: SyncResults = {
+        uploadedNew: [], uploadedVersion: [], downloaded: [], movedLocal: [],
+        deletedRemoteIds: [], failedRemoteIds: [],
+    };
     const root = pair.local;
     const folderCache = new Map<string, string>(remoteFolderPaths(folders, pair.remoteFolderId));
     const cfg = await loadConfig();
@@ -124,7 +198,23 @@ export async function applyActions(
 
     const STAT_BATCH = 256;
 
-    // 1) New uploads — resolve parent folders serially (so idempotent folder
+    // Pre-create every folder the uploads need in one batched pass (turns a
+    // first backup's thousands of folder round-trips into a few). The per-item
+    // ensureRemoteFolder calls below then hit the warmed cache. Best-effort:
+    // anything the batch misses falls back to lazy creation.
+    const uploadParents = new Set<string>();
+    for (const a of actions) {
+        if (a.kind === "upload-new" || a.kind === "upload-update") {
+            const p = parentOf(a.relPath);
+            if (p) uploadParents.add(p);
+        }
+    }
+    if (uploadParents.size > 0) {
+        try { await prewarmFolders(remote, pair.remoteFolderId, folderCache, uploadParents); }
+        catch (err) { debug(`sync: folder prewarm failed (${(err as Error).message}); falling back to lazy create`); }
+    }
+
+    // 1) New uploads - resolve parent folders serially (so idempotent folder
     //    creation can't race the shared cache), then stat files in bounded-
     //    parallel batches. A 100k-file first backup must not block the event
     //    loop on a synchronous statSync loop before uploads even start.
@@ -170,14 +260,15 @@ export async function applyActions(
             // Each PUT bumps the running upload count + bytes so a big first push
             // shows live movement and a byte-based ETA, not one summary at the end.
             // Per-file failures are collected (not fatal) so one bad file in /var
-            // doesn't abort the whole backup — it just retries next cycle.
-            const n = await remote.uploadNew(smallNew, {
+            // doesn't abort the whole backup - it just retries next cycle.
+            const r = await remote.uploadNew(smallNew, {
                 concurrency: parallel,
                 onProgress: (done, bytes) => { upDone = done; upBytes += bytes; reportUp(); },
                 onError: (name, err) => failures.push({ action: `upload-new ${name}`, error: err.message }),
             });
-            applied += n;
-            debug(`sync: uploaded ${n} new file(s)`);
+            applied += r.committed;
+            results.uploadedNew.push(...r.files);
+            debug(`sync: uploaded ${r.committed} new file(s)`);
         } catch (err) {
             failures.push({ action: "upload-new batch", error: (err as Error).message });
         }
@@ -186,7 +277,8 @@ export async function applyActions(
     await Promise.all(largeNew.map(item => sem.run(async () => {
         try {
             const mime = Bun.file(item.localPath).type || "application/octet-stream";
-            await remote.uploadViaInit(item.localPath, item.name, item.size, mime, item.folderId, null);
+            const up = await remote.uploadViaInit(item.localPath, item.name, item.size, mime, item.folderId, null);
+            results.uploadedNew.push({ relPath: item.relPath, fileId: up.fileId, name: item.name, folderId: item.folderId, size: up.size, updatedAt: up.updatedAt, version: up.version });
             applied++;
             upDone++; upBytes += item.size; reportUp();
         } catch (err) {
@@ -213,14 +305,14 @@ export async function applyActions(
     }
     await Promise.all(updates.map(u => sem.run(async () => {
         try {
-            if (deltaEnabled && u.size > 0 && u.size <= DELTA_MAX_BYTES) {
-                await remote.uploadDelta(u.full, u.name, u.size, u.mime, u.remoteId, u.folderId);
-            } else {
-                await remote.uploadVersion(u.full, u.name, u.size, u.mime, u.remoteId, u.folderId);
-            }
+            const up = (deltaEnabled && u.size > 0 && u.size <= DELTA_MAX_BYTES)
+                ? await remote.uploadDelta(u.full, u.name, u.size, u.mime, u.remoteId, u.folderId)
+                : await remote.uploadVersion(u.full, u.name, u.size, u.mime, u.remoteId, u.folderId);
+            results.uploadedVersion.push({ remoteId: u.remoteId, size: up.size, updatedAt: up.updatedAt, version: up.version });
             applied++;
             upDone++; upBytes += u.size; reportUp();
         } catch (err) {
+            results.failedRemoteIds.push(u.remoteId);
             failures.push({ action: `upload-update ${u.relPath}`, error: (err as Error).message });
         }
     })));
@@ -232,33 +324,39 @@ export async function applyActions(
             const urls = await remote.downloadUrls(downloads.map(a => a.remoteId));
             const byId = new Map(urls.map(u => [u.fileId, u]));
             await Promise.all(downloads.map(a => sem.run(async () => {
+                const full = join(root, a.localPath);
+                const tmp = `${full}.dosya-partial`;
                 try {
                     const u = byId.get(a.remoteId);
                     if (!u) throw new Error("no download url returned");
-                    const full = join(root, a.localPath);
                     mkdirSync(dirname(full), { recursive: true });
                     const res = await fetch(u.url, { signal: AbortSignal.timeout(getLongTimeout(600_000)) });
-                    // Check res.ok only — reading the res.body getter before
+                    // Check res.ok only - reading the res.body getter before
                     // Bun.write(res) makes Bun.write hang forever (verified). Let
                     // Bun.write stream the body itself.
                     if (!res.ok) throw new Error(`download HTTP ${res.status}`);
-                    const tmp = `${full}.dosya-partial`;
                     await Bun.write(tmp, res);
                     renameSync(tmp, full);
+                    const st = await stat(full); // local truth for the state record
+                    results.downloaded.push({ remoteId: a.remoteId, relPath: a.relPath, mtimeMs: st.mtimeMs, size: st.size });
                     applied++;
                     downDone++; downBytes += a.size ?? u.size ?? 0; reportDown();
                 } catch (err) {
+                    // Don't leak a half-written temp file on failure.
+                    try { rmSync(tmp, { force: true }); } catch { /* best effort */ }
+                    results.failedRemoteIds.push(a.remoteId);
                     failures.push({ action: `download ${a.relPath}`, error: (err as Error).message });
                 }
             })));
         } catch (err) {
+            for (const a of downloads) results.failedRemoteIds.push(a.remoteId);
             failures.push({ action: "download-manifest", error: (err as Error).message });
         }
     }
 
     // 3b) Conflicts (keep-both): preserve the local copy under a new name, then
     //     pull the remote version to the original path. Both survive, and the
-    //     conflicted copy uploads on the next cycle — nothing is frozen or lost.
+    //     conflicted copy uploads on the next cycle - nothing is frozen or lost.
     const conflictActions = actions.filter(a => a.kind === "conflict") as Extract<SyncAction, { kind: "conflict" }>[];
     if (conflictActions.length > 0) {
         const pull: { remoteId: string; relPath: string; size?: number }[] = [];
@@ -270,6 +368,7 @@ export async function applyActions(
                 }
                 pull.push({ remoteId: a.remoteId, relPath: a.relPath, size: a.remoteSize });
             } catch (err) {
+                results.failedRemoteIds.push(a.remoteId);
                 failures.push({ action: `conflict ${a.relPath}`, error: (err as Error).message });
             }
         }
@@ -277,24 +376,29 @@ export async function applyActions(
             const urls = await remote.downloadUrls(pull.map(p => p.remoteId));
             const byId = new Map(urls.map(u => [u.fileId, u]));
             await Promise.all(pull.map(p => sem.run(async () => {
+                const full = join(root, p.relPath);
+                const tmp = `${full}.dosya-partial`;
                 try {
                     const u = byId.get(p.remoteId);
                     if (!u) throw new Error("no download url returned");
-                    const full = join(root, p.relPath);
                     mkdirSync(dirname(full), { recursive: true });
                     const res = await fetch(u.url, { signal: AbortSignal.timeout(getLongTimeout(600_000)) });
                     // See the note above: never touch res.body before Bun.write.
                     if (!res.ok) throw new Error(`download HTTP ${res.status}`);
-                    const tmp = `${full}.dosya-partial`;
                     await Bun.write(tmp, res);
                     renameSync(tmp, full);
+                    const st = await stat(full);
+                    results.downloaded.push({ remoteId: p.remoteId, relPath: p.relPath, mtimeMs: st.mtimeMs, size: st.size });
                     applied++;
                     downDone++; downBytes += p.size ?? u.size ?? 0; reportDown();
                 } catch (err) {
+                    try { rmSync(tmp, { force: true }); } catch { /* best effort */ }
+                    results.failedRemoteIds.push(p.remoteId);
                     failures.push({ action: `conflict-download ${p.relPath}`, error: (err as Error).message });
                 }
             })));
         } catch (err) {
+            for (const p of pull) results.failedRemoteIds.push(p.remoteId);
             failures.push({ action: "conflict-download-manifest", error: (err as Error).message });
         }
     }
@@ -306,8 +410,10 @@ export async function applyActions(
             const to = join(root, a.toPath);
             mkdirSync(dirname(to), { recursive: true });
             renameSync(join(root, a.fromPath), to);
+            results.movedLocal.push({ remoteId: a.remoteId, fromPath: a.fromPath, toPath: a.toPath });
             applied++;
         } catch (err) {
+            results.failedRemoteIds.push(a.remoteId);
             failures.push({ action: `move-local ${a.fromPath}`, error: (err as Error).message });
         }
     }
@@ -319,6 +425,7 @@ export async function applyActions(
             rmSync(join(root, a.localPath), { force: true });
             applied++;
         } catch (err) {
+            results.failedRemoteIds.push(a.remoteId);
             failures.push({ action: `delete-local ${a.localPath}`, error: (err as Error).message });
         }
     }
@@ -328,11 +435,13 @@ export async function applyActions(
         if (a.kind !== "delete-remote") continue;
         try {
             await remote.deleteFile(a.remoteId);
+            results.deletedRemoteIds.push(a.remoteId);
             applied++;
         } catch (err) {
+            results.failedRemoteIds.push(a.remoteId);
             failures.push({ action: `delete-remote ${a.relPath}`, error: (err as Error).message });
         }
     }
 
-    return { applied, conflicts, failures };
+    return { applied, conflicts, failures, results };
 }

@@ -98,7 +98,7 @@ async function putWholeFile(
             if (!res.ok) {
                 const err = res.data as { error?: string };
                 const message = err?.error ?? `Upload failed: ${res.status}`;
-                // 4xx is a rejection, not a blip — replaying will not help
+                // 4xx is a rejection, not a blip - replaying will not help
                 if (res.status >= 400 && res.status < 500) throw new Error(message);
                 throw Object.assign(new Error(message), { retryable: true });
             }
@@ -183,7 +183,7 @@ async function uploadSingleFile(
         throw err;
     }
 
-    // Small file — a single streamed PUT, retried by reopening the stream
+    // Small file - a single streamed PUT, retried by reopening the stream
     const uploaded = await putWholeFile(client, filePath, uploadUrl, size, name, showProgress);
     return { ok: true, file: uploaded };
 }
@@ -202,7 +202,7 @@ function walkDir(dir: string, out: WalkResult = { files: [], skipped: [] }): Wal
         } else if (entry.isFile()) {
             out.files.push(fullPath);
         } else {
-            // Symlinks, sockets, FIFOs, devices — record them so the skip is
+            // Symlinks, sockets, FIFOs, devices - record them so the skip is
             // visible rather than silent
             out.skipped.push(fullPath);
         }
@@ -349,7 +349,7 @@ export async function upload(args: string[], flags: Record<string, string>): Pro
                 folderMap.set(dir, resolvedId);
             } else {
                 folderFailures++;
-                console.error(`Warning: could not resolve folder ID for "${dir}" — its files will go to the parent folder.`);
+                console.error(`Warning: could not resolve folder ID for "${dir}" - its files will go to the parent folder.`);
             }
         } catch (err) {
             folderFailures++;

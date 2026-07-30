@@ -6,7 +6,7 @@ import { parseArgs } from "../../src/parse-args";
  * the next token, so `dosya ls --json ws_abc` silently swallowed the workspace
  * ID as the value of `--json`.
  */
-describe("parseArgs — boolean flags must not consume positionals", () => {
+describe("parseArgs - boolean flags must not consume positionals", () => {
     const booleans = ["json", "quiet", "debug", "recursive", "force", "permanent", "no-color"];
 
     for (const flag of booleans) {
@@ -45,7 +45,7 @@ describe("parseArgs — boolean flags must not consume positionals", () => {
     });
 });
 
-describe("parseArgs — --flag=value form", () => {
+describe("parseArgs - --flag=value form", () => {
     it("parses --workspace=ws_abc", () => {
         const result = parseArgs(["ls", "--workspace=ws_abc"]);
         expect(result.args).toEqual(["ls"]);
@@ -63,7 +63,7 @@ describe("parseArgs — --flag=value form", () => {
     });
 });
 
-describe("parseArgs — value flags", () => {
+describe("parseArgs - value flags", () => {
     it("accepts a negative number as a value", () => {
         const result = parseArgs(["--timeout", "-5"]);
         expect(result.flags.timeout).toBe("-5");
@@ -82,7 +82,7 @@ describe("parseArgs — value flags", () => {
     });
 });
 
-describe("parseArgs — separator", () => {
+describe("parseArgs - separator", () => {
     it("treats everything after -- as positional", () => {
         const result = parseArgs(["upload", "--", "--json", "-r"]);
         expect(result.args).toEqual(["upload", "--json", "-r"]);

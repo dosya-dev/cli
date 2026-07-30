@@ -70,7 +70,7 @@ export async function versions(args: string[], flags: Record<string, string>): P
             if (flags.json !== undefined) {
                 printJson(res);
             } else {
-                log(`Restored version ${res.restored_from} — the file is now at version ${res.version}.`);
+                log(`Restored version ${res.restored_from} - the file is now at version ${res.version}.`);
             }
             return;
         }
@@ -88,7 +88,7 @@ export async function versions(args: string[], flags: Record<string, string>): P
             return;
         }
 
-        log(`${data.file_name} — current version ${data.current_version}`);
+        log(`${data.file_name} - current version ${data.current_version}`);
         printTable(
             ["VERSION", "SIZE", "UPLOADER", "CREATED"],
             data.versions.map(v => [

@@ -7,7 +7,7 @@ import { chunkBuffer, chunkFile, diffChunks, type Chunk } from "../../src/sync/c
 // Small params so a few hundred KB yields many chunks (fast, still exercises the algorithm).
 const OPTS = { minSize: 1024, avgSize: 4096, maxSize: 16384 };
 
-/** Deterministic pseudo-random bytes (LCG) — no RNG, so tests are stable. */
+/** Deterministic pseudo-random bytes (LCG) - no RNG, so tests are stable. */
 function lcgBytes(n: number, seed: number): Uint8Array {
     const out = new Uint8Array(n);
     let s = seed >>> 0;
@@ -44,7 +44,7 @@ describe("chunker", () => {
         expect(await chunkFile(path, OPTS)).toEqual(chunkBuffer(data, OPTS));
     });
 
-    it("localises an edit — most chunks survive (the delta property)", () => {
+    it("localises an edit - most chunks survive (the delta property)", () => {
         const a = lcgBytes(300_000, 4);
         const b = a.slice();
         // Overwrite ~100 bytes in the middle.

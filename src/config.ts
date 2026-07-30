@@ -51,7 +51,7 @@ export async function loadConfig(): Promise<DosyaConfig | null> {
 
 export async function saveConfig(config: DosyaConfig): Promise<void> {
     ensureDir();
-    // Write to a per-process temp file first, then atomic rename — this avoids
+    // Write to a per-process temp file first, then atomic rename - this avoids
     // two concurrent writers sharing one temp path, and never leaves a
     // half-written config in place.
     //

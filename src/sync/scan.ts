@@ -9,8 +9,18 @@ export interface LocalEntry {
 
 export interface ScanResult {
     entries: Map<string, LocalEntry>;
-    /** True if any directory could not be read — deletes are suppressed this cycle. */
+    /** True if any directory could not be read - deletes are suppressed this cycle. */
     incomplete: boolean;
+}
+
+export interface ScanOptions {
+    /**
+     * Stay on the sync root's filesystem: skip any directory whose device id
+     * differs from the root's. This excludes pseudo-filesystems (/proc, /sys,
+     * /dev, /run - each a distinct mount whose files can block on read) and
+     * other mounted disks / network shares. Essential for whole-disk backups.
+     */
+    oneFileSystem?: boolean;
 }
 
 const MAX_DEPTH = 50;
@@ -30,11 +40,22 @@ const STAT_BATCH = 256;       // files statted in parallel per batch
  * (Ctrl-C stays responsive, progress can still render). The old synchronous
  * `readdirSync`/`statSync` walk blocked the loop for the whole traversal.
  */
-export async function scanLocal(root: string, isExcluded: (relPath: string) => boolean): Promise<ScanResult> {
+export async function scanLocal(
+    root: string,
+    isExcluded: (relPath: string) => boolean,
+    opts: ScanOptions = {},
+): Promise<ScanResult> {
     const entries = new Map<string, LocalEntry>();
     let incomplete = false;
 
-    // Phase 1 — discover the tree breadth-first, reading directories in bounded-
+    // For --one-file-system, remember the root's device id so we can skip any
+    // directory that lives on a different filesystem (a mount or pseudo-fs).
+    let rootDev: number | null = null;
+    if (opts.oneFileSystem) {
+        try { rootDev = (await stat(root)).dev; } catch { /* fall back to no boundary */ }
+    }
+
+    // Phase 1 - discover the tree breadth-first, reading directories in bounded-
     // concurrency batches. Directories are recorded immediately; files are queued
     // for statting (readdir alone can't give a reliable size/mtime).
     const files: { full: string; rel: string }[] = [];
@@ -63,6 +84,14 @@ export async function scanLocal(root: string, isExcluded: (relPath: string) => b
                     if (isExcluded(rel)) continue;
 
                     if (item.isDirectory()) {
+                        // --one-file-system: don't cross into a mount / pseudo-fs.
+                        // A boundary is intentional, so it does NOT set `incomplete`
+                        // (that would needlessly suppress deletions this cycle).
+                        if (rootDev !== null) {
+                            let dev: number | null = null;
+                            try { dev = (await stat(full)).dev; } catch { incomplete = true; continue; }
+                            if (dev !== rootDev) continue;
+                        }
                         entries.set(rel, { size: 0, mtimeMs: 0, isDir: true });
                         nextFrontier.push({ dir: full, depth: listing.depth + 1 });
                     } else if (item.isFile()) {
@@ -76,7 +105,7 @@ export async function scanLocal(root: string, isExcluded: (relPath: string) => b
         frontier = nextFrontier;
     }
 
-    // Phase 2 — stat files in bounded-parallel batches. Awaiting each batch caps
+    // Phase 2 - stat files in bounded-parallel batches. Awaiting each batch caps
     // both in-flight file handles and peak memory, and yields between batches.
     for (let i = 0; i < files.length; i += STAT_BATCH) {
         await Promise.all(files.slice(i, i + STAT_BATCH).map(async ({ full, rel }) => {

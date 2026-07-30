@@ -48,7 +48,7 @@ export async function upgrade(flags: Record<string, string>): Promise<void> {
     if (!isCompiledBinary()) {
         fatal(
             "dosya upgrade only works on an installed dosya binary. " +
-            "You are running from source — use git to update this checkout instead.",
+            "You are running from source - use git to update this checkout instead.",
             EXIT.USAGE,
         );
     }
@@ -109,7 +109,7 @@ export async function upgrade(flags: Record<string, string>): Promise<void> {
     const actualChecksum = sha256(binary);
     if (actualChecksum !== expectedChecksum) {
         fatal(
-            `Checksum mismatch — refusing to install.\n` +
+            `Checksum mismatch - refusing to install.\n` +
             `  expected: ${expectedChecksum}\n` +
             `  actual:   ${actualChecksum}`,
             EXIT.ERROR,

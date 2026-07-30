@@ -29,7 +29,7 @@ export function getRequestTimeout(): number {
  *
  * Uploads and downloads need far longer than a metadata call, but must still
  * honour an explicit `--timeout`. This tracks whether the flag was passed
- * rather than comparing against the default value — `--timeout 30` is a
+ * rather than comparing against the default value - `--timeout 30` is a
  * deliberate choice and must not be mistaken for "unset".
  */
 export function getLongTimeout(defaultMs: number): number {
@@ -40,7 +40,7 @@ export function getLongTimeout(defaultMs: number): number {
  * True when running as a `bun build --compile` binary.
  *
  * Under `bun run src/index.ts`, `process.execPath` is the user's bun
- * interpreter — self-replacing or deleting it would destroy their Bun install.
+ * interpreter - self-replacing or deleting it would destroy their Bun install.
  */
 export function isCompiledBinary(): boolean {
     // Bun's single-file executables expose a virtual filesystem root
@@ -57,7 +57,7 @@ type CleanupHandler = () => void;
 const cleanupHandlers = new Set<CleanupHandler>();
 
 /**
- * Register work that must happen before the process exits on Ctrl+C —
+ * Register work that must happen before the process exits on Ctrl+C -
  * flushing download resume state, closing file descriptors, and so on.
  */
 export function onInterrupt(handler: CleanupHandler): () => void {
@@ -70,7 +70,7 @@ export function runCleanup(): void {
         try {
             handler();
         } catch {
-            // Best effort — never let cleanup block exit
+            // Best effort - never let cleanup block exit
         }
     }
     cleanupHandlers.clear();

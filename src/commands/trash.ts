@@ -74,7 +74,7 @@ async function trashRestore(client: DosyaClient, workspaceId: string, refs: stri
             if (named.length === 1) {
                 match = named[0];
             } else if (named.length > 1) {
-                failures.push({ target: ref, error: `ambiguous — ids: ${named.map(n => n.id).join(", ")}` });
+                failures.push({ target: ref, error: `ambiguous - ids: ${named.map(n => n.id).join(", ")}` });
                 continue;
             }
         }

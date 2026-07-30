@@ -33,7 +33,7 @@ const MAX_RETRY_AFTER_MS = 60_000;
  *
  * POST is excluded because it creates resources (an invite retried three times
  * sends three invites). DELETE is excluded because this API treats a second
- * DELETE on a file as "permanently delete" — replaying a soft delete that
+ * DELETE on a file as "permanently delete" - replaying a soft delete that
  * actually succeeded would destroy the file.
  */
 const RETRYABLE_METHODS = new Set(["GET", "HEAD", "PUT"]);
@@ -95,7 +95,7 @@ export class DosyaClient {
         await response.body?.cancel().catch(() => {});
         const base = httpErrorMessage(response.status);
         if (response.status >= 400 && response.status < 500) {
-            return { error: `${base} (the API returned a non-JSON response — check DOSYA_API_BASE, currently ${this.apiBase})` };
+            return { error: `${base} (the API returned a non-JSON response - check DOSYA_API_BASE, currently ${this.apiBase})` };
         }
         return { error: base };
     }
@@ -107,6 +107,7 @@ export class DosyaClient {
         const headers: Record<string, string> = { ...opts.headers };
         if (this.isSameOrigin(url)) {
             headers["Authorization"] = `Bearer ${this.apiKey}`;
+            headers["X-Dosya-Client"] = "cli";
         } else {
             debug(`Omitting credentials for cross-origin request to ${url}`);
         }
@@ -127,7 +128,7 @@ export class DosyaClient {
 
         // A ReadableStream body can only be consumed once, so it can never be
         // resent. A non-idempotent method may only be replayed when the server
-        // tells us it did not process the request (429) — never after a 5xx or
+        // tells us it did not process the request (429) - never after a 5xx or
         // a transport error, where the write may well have landed.
         const canResend = !isStreamBody;
         const canReplay = canResend && RETRYABLE_METHODS.has(method);
@@ -147,10 +148,10 @@ export class DosyaClient {
 
                 debug(`${method} ${url} → ${response.status}`);
 
-                // Auth errors — never retry. A 401 almost always means the key
+                // Auth errors - never retry. A 401 almost always means the key
                 // is bad, so the re-auth hint is the most useful thing to say. A
                 // 403 carries a specific reason (plan limit, forced 2FA, disabled
-                // password login, missing permission…) — surface the server's
+                // password login, missing permission…) - surface the server's
                 // message instead of hiding it behind a generic string.
                 if (response.status === 401) {
                     await response.body?.cancel().catch(() => {});
@@ -173,7 +174,7 @@ export class DosyaClient {
                     continue;
                 }
 
-                // Other client errors — surface the server's message, or a clear
+                // Other client errors - surface the server's message, or a clear
                 // status-based fallback, never a bare "Unknown error".
                 if (response.status >= 400 && response.status < 500) {
                     const data = await this.errorData(response) as T;
@@ -189,7 +190,7 @@ export class DosyaClient {
                     continue;
                 }
 
-                // A 5xx we won't retry further — normalize to a clear message too.
+                // A 5xx we won't retry further - normalize to a clear message too.
                 if (response.status >= 500) {
                     const data = await this.errorData(response) as T;
                     return { ok: false, status: response.status, data, headers: response.headers };

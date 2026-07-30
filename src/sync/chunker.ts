@@ -1,19 +1,19 @@
 /**
  * Content-defined chunking (FastCDC-style) for block-level delta sync.
  *
- * Ported byte-for-byte from apps/desktop/src/main/sync/chunker.ts — the gear
+ * Ported byte-for-byte from apps/desktop/src/main/sync/chunker.ts - the gear
  * table, masks, and cut logic MUST stay identical or chunks won't dedup across
  * the desktop and CLI clients. Pure and deterministic (no RNG): the same bytes
  * always produce the same chunk boundaries and hashes on every machine.
  */
 
-/** Reassembly cap — must match MAX_BYTES in apps/api/src/pages/api/sync/chunks/commit.ts. */
+/** Reassembly cap - must match MAX_BYTES in apps/api/src/pages/api/sync/chunks/commit.ts. */
 export const DELTA_MAX_BYTES = 64 * 1024 * 1024;
 
 export interface Chunk {
     offset: number;
     size: number;
-    /** sha256 hex — the chunk's identity for dedup. */
+    /** sha256 hex - the chunk's identity for dedup. */
     hash: string;
 }
 
@@ -60,7 +60,7 @@ function sha256(buf: Uint8Array): string {
     return new Bun.CryptoHasher("sha256").update(buf).digest("hex");
 }
 
-/** Chunk an in-memory buffer — the reference implementation of the cut algorithm. */
+/** Chunk an in-memory buffer - the reference implementation of the cut algorithm. */
 export function chunkBuffer(buf: Uint8Array, opts?: ChunkOptions): Chunk[] {
     const { min, avg, max, maskS, maskL } = resolveParams(opts);
     const n = buf.length;
@@ -84,7 +84,7 @@ export function chunkBuffer(buf: Uint8Array, opts?: ChunkOptions): Chunk[] {
     return chunks;
 }
 
-/** Chunk a file on disk by streaming — identical output to chunkBuffer. */
+/** Chunk a file on disk by streaming - identical output to chunkBuffer. */
 export async function chunkFile(path: string, opts?: ChunkOptions): Promise<Chunk[]> {
     const { min, avg, max, maskS, maskL } = resolveParams(opts);
     const chunks: Chunk[] = [];
@@ -136,7 +136,7 @@ export interface ChunkDiff {
     totalChunks: number;
 }
 
-/** Which chunks the server doesn't already have — the only bytes to send. */
+/** Which chunks the server doesn't already have - the only bytes to send. */
 export function diffChunks(known: Set<string>, chunks: Chunk[]): ChunkDiff {
     const toUpload: Chunk[] = [];
     let uploadBytes = 0;

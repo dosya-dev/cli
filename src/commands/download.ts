@@ -127,7 +127,7 @@ async function getPresignedUrl(client: DosyaClient, fileId: string): Promise<str
         redirect: "manual",
     });
 
-    // 302 redirect — extract Location header
+    // 302 redirect - extract Location header
     if (res.status === 302 || res.status === 301 || res.status === 307 || res.status === 308) {
         const location = res.headers.get("location");
         if (!location) throw new Error("Redirect response missing Location header");
@@ -332,7 +332,7 @@ async function downloadSingle(
 /**
  * Run a single-connection download, re-presigning if the URL expires.
  *
- * There is no Range support on this path, so an expiry restarts the transfer —
+ * There is no Range support on this path, so an expiry restarts the transfer -
  * but restarting beats failing outright, which is what a bare 403 used to do.
  */
 async function downloadSingleWithRefresh(
@@ -362,7 +362,7 @@ async function downloadSingleWithRefresh(
 /**
  * Determine whether the origin honours Range requests.
  *
- * A 403 here means the presigned URL expired, NOT that Range is unsupported —
+ * A 403 here means the presigned URL expired, NOT that Range is unsupported -
  * conflating the two sent large downloads down the single-connection fallback,
  * where they immediately failed with "Download failed: HTTP 403".
  */
@@ -436,7 +436,7 @@ async function compositeEtag(path: string, partSize: number, partCount: number):
  */
 async function verifyIntegrity(outputPath: string, size: number, etag: string | null): Promise<void> {
     if (!etag) {
-        debug("No ETag from origin — skipping content verification");
+        debug("No ETag from origin - skipping content verification");
         return;
     }
 
@@ -454,7 +454,7 @@ async function verifyIntegrity(outputPath: string, size: number, etag: string | 
         const partCount = Number(composite[2]);
         // Only verify when the object's layout matches what this API produces
         if (Math.ceil(size / MULTIPART_PART_SIZE) !== partCount) {
-            debug(`Composite ETag with an unknown part layout (${partCount} parts) — skipping verification`);
+            debug(`Composite ETag with an unknown part layout (${partCount} parts) - skipping verification`);
             return;
         }
         const actual = await compositeEtag(outputPath, MULTIPART_PART_SIZE, partCount);
@@ -465,13 +465,13 @@ async function verifyIntegrity(outputPath: string, size: number, etag: string | 
         return;
     }
 
-    debug(`Unrecognized ETag format (${etag}) — skipping content verification`);
+    debug(`Unrecognized ETag format (${etag}) - skipping content verification`);
 }
 
 /**
  * Stream the object straight to stdout for shell pipelines.
  *
- * stdout is not seekable, so this is always a single ordered connection — no
+ * stdout is not seekable, so this is always a single ordered connection - no
  * segments, no resume, no sidecar. Progress stays on stderr so it does not
  * corrupt the piped bytes.
  */
@@ -666,7 +666,7 @@ async function downloadRecursive(
                 const full = join(outDir, f.relPath);
                 mkdirSync(dirname(full), { recursive: true });
                 const res = await fetch(u.url, { signal: AbortSignal.timeout(getLongTimeout(600_000)) });
-                // Check res.ok only — touching res.body before Bun.write(res) hangs it.
+                // Check res.ok only - touching res.body before Bun.write(res) hangs it.
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const tmp = `${full}.dosya-partial`;
                 await Bun.write(tmp, res);
@@ -784,7 +784,7 @@ export async function download(args: string[], flags: Record<string, string>): P
 
         if (!isJson && !resuming) log(`File: ${meta.name} (${formatBytes(totalSize)})`);
 
-        // Get presigned URL (does NOT download the file — captures redirect)
+        // Get presigned URL (does NOT download the file - captures redirect)
         if (!isJson) process.stderr.write("Connecting...\r");
         let presignedUrl = await getPresignedUrl(client, fileId);
         debug(`Presigned URL obtained`);
@@ -798,7 +798,7 @@ export async function download(args: string[], flags: Record<string, string>): P
         const useParallel = totalSize >= MIN_SEGMENT_SIZE * 2 && numConnections > 1;
 
         if (!useParallel) {
-            // Small file — single connection, no Range needed
+            // Small file - single connection, no Range needed
             debug("Single connection download");
             const etag = await downloadSingleWithRefresh(presignedUrl, outputPath, makeBar, refreshUrl);
             await finishDownload(outputPath, meta, isJson, 1, etag, verify);
@@ -901,7 +901,7 @@ async function finishDownload(
 
     if (written !== meta.size_bytes) {
         // A short file is a failed download, not a warning. Keep the resume
-        // sidecar — telling the user to re-run only helps if the state that
+        // sidecar - telling the user to re-run only helps if the state that
         // makes resuming possible is still on disk.
         fatal(
             `Incomplete download: expected ${formatBytes(meta.size_bytes)} but wrote ${formatBytes(written)}. ` +

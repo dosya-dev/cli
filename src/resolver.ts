@@ -4,7 +4,7 @@
  * Turns a human reference into a concrete `{ type, id, workspaceId }`. Accepts:
  *   - `ws_id:folder/sub/name.ext`   (explicit workspace)
  *   - `folder/sub/name.ext`         (workspace from --workspace / default)
- *   - `file_…` / `fld_…` / `ws_…`   (raw ids, passed through — no network)
+ *   - `file_…` / `fld_…` / `ws_…`   (raw ids, passed through - no network)
  *
  * ID prefixes are the real ones minted by the API: files `file_`, folders
  * `fld_`, workspaces `ws_`.
@@ -64,7 +64,7 @@ export interface ParsedRef {
 
 /**
  * Split a reference into a workspace, path segments, and (if it *is* an id) the
- * raw id. Pure — no network. Workspace precedence: explicit `ws_…:` prefix >
+ * raw id. Pure - no network. Workspace precedence: explicit `ws_…:` prefix >
  * `opts.workspace` > `opts.defaultWorkspace`.
  */
 export function parseRef(ref: string, opts: { workspace?: string; defaultWorkspace?: string }): ParsedRef {
@@ -92,7 +92,7 @@ export function parseRef(ref: string, opts: { workspace?: string; defaultWorkspa
         };
     }
 
-    // Tolerate a leading `./` or `/` — paths are always workspace-root-relative.
+    // Tolerate a leading `./` or `/` - paths are always workspace-root-relative.
     rest = rest.replace(/^\.?\//, "");
     const segments = rest.length ? rest.split("/").filter(s => s.length > 0) : [];
     return { workspaceId, segments, rawId: null };
@@ -150,7 +150,7 @@ export class Resolver {
     ): Promise<Resolved> {
         const parsed = parseRef(ref, opts);
 
-        // A raw id is globally unique and addressable on its own — no workspace
+        // A raw id is globally unique and addressable on its own - no workspace
         // needed (this keeps `dosya download file_…` working with no default set).
         if (parsed.rawId) {
             return {
@@ -207,11 +207,11 @@ export class Resolver {
         }
         if (matches.length > 1) {
             throw new ResolveError(
-                `"${fullPath}" is ambiguous — matches file ids: ${matches.map(m => m.id).join(", ")}. Use an id.`,
+                `"${fullPath}" is ambiguous - matches file ids: ${matches.map(m => m.id).join(", ")}. Use an id.`,
             );
         }
 
-        // Not a file — fall back to a folder with that path.
+        // Not a file - fall back to a folder with that path.
         const fid = idx.pathToId.get(fullPath);
         if (fid) return { type: "folder", id: fid, workspaceId, name: leafName };
 

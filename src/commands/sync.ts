@@ -86,9 +86,11 @@ Usage:
   dosya sync remove <pair-id> [--force]                    Remove a pair
 
 Add flags:
-  --mode <m>         two-way (default), push, push-safe, pull, pull-safe
-  --conflict <c>     last-write-wins (default), keep-both
-  --exclude <glob>   Ignore matching paths (repeatable)
+  --mode <m>          two-way (default), push, push-safe, pull, pull-safe
+  --conflict <c>      last-write-wins (default), keep-both
+  --exclude <glob>    Ignore matching paths (repeatable)
+  --one-file-system   Stay on the root's filesystem - skip mounts and pseudo-fs
+                      (/proc, /sys, /dev, other disks). Use for whole-disk backups.
 
 A .dosyaignore file at the sync root (one glob per line) is also honoured.
 With --conflict keep-both, a conflicting local file is preserved as
@@ -162,6 +164,7 @@ async function syncAdd(rest: string[], flags: Record<string, string>, multi: Rec
             conflictStrategy: conflict,
             excludes,
             pollIntervalMs: 15000,
+            ...(flags["one-file-system"] !== undefined ? { oneFileSystem: true } : {}),
         };
         cfg.pairs.push(pair);
         saveSyncConfig(cfg);

@@ -70,7 +70,7 @@ describe("makeSyncReporter (non-TTY path)", () => {
         for (let i = 1; i <= 250; i++) {
             report({ kind: "upload", done: i, total: 250, bytes: i * mb, totalBytes: 250 * mb });
         }
-        // Emits at 100, 200, and the final 250 (done === total) — not all 250.
+        // Emits at 100, 200, and the final 250 (done === total) - not all 250.
         expect(errors.length).toBe(3);
         expect(errors[0]).toContain("[p1] uploading 100/250 · 100.0 MB / 250.0 MB");
         expect(errors[0]).toContain("/s"); // a rate is present

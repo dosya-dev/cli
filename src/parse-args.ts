@@ -18,7 +18,7 @@ const SHORT_FLAGS: Record<string, string> = {
  * Flags that take a value.
  *
  * Anything not listed here is a boolean and must NEVER consume the following
- * token — otherwise `dosya ls --json ws_abc` silently swallows the workspace
+ * token - otherwise `dosya ls --json ws_abc` silently swallows the workspace
  * ID as the value of `--json`.
  */
 const VALUE_FLAGS = new Set([
@@ -58,6 +58,7 @@ const BOOLEAN_FLAGS = new Set([
     "json",
     "no-color",
     "no-verify",
+    "one-file-system",
     "permanent",
     "quiet",
     "recursive",

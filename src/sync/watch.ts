@@ -41,7 +41,7 @@ export async function watchPair(client: DosyaClient, pair: SyncPair): Promise<vo
     // Initial reconcile.
     await runOnce();
 
-    // Local watcher — recursive isn't reliable on all Linux kernels, so the
+    // Local watcher - recursive isn't reliable on all Linux kernels, so the
     // interval poll below covers correctness there at some latency cost.
     let watcher: FSWatcher | null = null;
     try {

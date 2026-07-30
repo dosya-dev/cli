@@ -117,7 +117,7 @@ export async function search(args: string[], flags: Record<string, string>): Pro
         }
 
         if (data.pagination?.has_more) {
-            log(`More results — rerun with --page ${(data.pagination.page ?? 1) + 1}`);
+            log(`More results - rerun with --page ${(data.pagination.page ?? 1) + 1}`);
         }
     } catch (err) {
         fatalError(err);

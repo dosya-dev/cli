@@ -12,13 +12,15 @@ export interface SyncPair {
     conflictStrategy: ConflictStrategy;
     excludes: string[];
     pollIntervalMs: number;
+    /** Stay on the root's filesystem (skip mounts + pseudo-fs). For disk backups. */
+    oneFileSystem?: boolean;
 }
 
 export interface SyncConfig {
     pairs: SyncPair[];
 }
 
-/** One file as of the last successful sync — the third input to the diff. */
+/** One file as of the last successful sync - the third input to the diff. */
 export interface SyncFileRecord {
     remoteId: string;
     remoteName: string;
@@ -53,7 +55,7 @@ export interface RemoteFile {
 /**
  * Live progress events emitted during a cycle so the CLI can show what a long
  * `sync run` is doing (a big first push of thousands of files can take minutes).
- * All handlers are best-effort — never let a reporter throw abort a transfer.
+ * All handlers are best-effort - never let a reporter throw abort a transfer.
  */
 export type SyncProgress =
     | { kind: "scan" }

@@ -87,7 +87,7 @@ async function main(): Promise<void> {
     setOutputFlags({
         quiet: flags.quiet !== undefined,
         debug: flags.debug !== undefined,
-        // https://no-color.org — any non-empty value disables styling
+        // https://no-color.org - any non-empty value disables styling
         noColor: flags["no-color"] !== undefined || Boolean(process.env.NO_COLOR),
     });
     setRequestTimeout(flags.timeout);

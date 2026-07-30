@@ -38,8 +38,8 @@ function isAllowedKey(key: string): key is ConfigKey {
 /**
  * Never print the stored API key.
  *
- * `config get --json` used to dump the raw config, so piping it anywhere —
- * a log, a bug report, CI output — leaked the credential.
+ * `config get --json` used to dump the raw config, so piping it anywhere -
+ * a log, a bug report, CI output - leaked the credential.
  */
 function redact(config: DosyaConfig | null): Record<string, unknown> {
     if (!config) return {};

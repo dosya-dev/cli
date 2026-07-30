@@ -67,7 +67,7 @@ export class ProgressBar {
         process.stderr.write(`\r${clamped}`);
     }
 
-    /** Erase the bar — used when an interrupt or error takes over the terminal. */
+    /** Erase the bar - used when an interrupt or error takes over the terminal. */
     clear(): void {
         if (!this.isTTY) return;
         const cols = process.stderr.columns || 120;
