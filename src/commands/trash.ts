@@ -4,15 +4,16 @@ import { printTable, printJson, timeAgo, fatal, fatalError, log, EXIT } from "..
 import { confirm } from "../prompt";
 import { formatBytes } from "@dosya-dev/shared";
 
-const HELP = `Manage the trash (soft-deleted files) on dosya.dev.
+const HELP = `Manage the trash (soft-deleted files and folders) on dosya.dev.
 
 Usage:
-  dosya trash list                     List files in the trash
-  dosya trash restore <id-or-name...>  Restore files from the trash
+  dosya trash list                     List files and folders in the trash
+  dosya trash restore <id-or-name...>  Restore files or folders from the trash
   dosya trash empty [--force]          Permanently delete everything in the trash
 
-Deleted files aren't in the folder tree, so restore takes file ids or exact
-names as shown by 'dosya trash list'.
+Deleted files and folders aren't in the folder tree, so restore takes ids or
+exact names as shown by 'dosya trash list'. Restoring a folder brings back
+everything that was deleted with it.
 
 Flags:
   --workspace, -w <id>   Workspace (or set a default)
@@ -35,34 +36,51 @@ interface TrashFile {
     deleted_at: number | null;
 }
 
-async function fetchTrash(client: DosyaClient, workspaceId: string): Promise<TrashFile[]> {
+interface TrashFolder {
+    id: string;
+    name: string;
+    deleted_at: number | null;
+    file_count: number;
+    total_size_bytes: number;
+}
+
+async function fetchTrash(client: DosyaClient, workspaceId: string): Promise<{ files: TrashFile[]; folders: TrashFolder[] }> {
     const params = new URLSearchParams({ workspace_id: workspaceId, deleted: "1", per_page: "500" });
-    const data = await client.get<{ ok: boolean; files: TrashFile[] }>(`/api/files?${params}`);
-    return data.files ?? [];
+    const data = await client.get<{ ok: boolean; files: TrashFile[]; folders?: TrashFolder[] }>(`/api/files?${params}`);
+    return { files: data.files ?? [], folders: data.folders ?? [] };
 }
 
 async function trashList(client: DosyaClient, workspaceId: string, flags: Record<string, string>): Promise<void> {
-    const files = await fetchTrash(client, workspaceId);
+    const { files, folders } = await fetchTrash(client, workspaceId);
     if (flags.json !== undefined) {
-        printJson({ ok: true, files });
+        printJson({ ok: true, files, folders });
         return;
     }
-    if (files.length === 0) {
+    if (files.length === 0 && folders.length === 0) {
         log("Trash is empty.");
         return;
     }
     printTable(
-        ["NAME", "SIZE", "DELETED", "ID"],
-        files.map(f => [f.name, formatBytes(f.size_bytes), f.deleted_at ? timeAgo(f.deleted_at) : "-", f.id]),
+        ["KIND", "NAME", "SIZE", "DELETED", "ID"],
+        [
+            ...folders.map(f => ["folder", f.name, `${f.file_count} item${f.file_count === 1 ? "" : "s"}`, f.deleted_at ? timeAgo(f.deleted_at) : "-", f.id]),
+            ...files.map(f => ["file", f.name, formatBytes(f.size_bytes), f.deleted_at ? timeAgo(f.deleted_at) : "-", f.id]),
+        ],
     );
 }
+
+type TrashEntry = ({ kind: "file" } & TrashFile) | ({ kind: "folder" } & TrashFolder);
 
 async function trashRestore(client: DosyaClient, workspaceId: string, refs: string[], flags: Record<string, string>): Promise<void> {
     if (refs.length === 0) {
         fatal("Usage: dosya trash restore <id-or-name...>", EXIT.USAGE);
     }
-    const files = await fetchTrash(client, workspaceId);
-    const byId = new Map(files.map(f => [f.id, f]));
+    const { files, folders } = await fetchTrash(client, workspaceId);
+    const entries: TrashEntry[] = [
+        ...folders.map(f => ({ kind: "folder" as const, ...f })),
+        ...files.map(f => ({ kind: "file" as const, ...f })),
+    ];
+    const byId = new Map(entries.map(e => [e.id, e]));
 
     let restored = 0;
     const failures: { target: string; error: string }[] = [];
@@ -70,7 +88,7 @@ async function trashRestore(client: DosyaClient, workspaceId: string, refs: stri
     for (const ref of refs) {
         let match = byId.get(ref);
         if (!match) {
-            const named = files.filter(f => f.name === ref);
+            const named = entries.filter(e => e.name === ref);
             if (named.length === 1) {
                 match = named[0];
             } else if (named.length > 1) {
@@ -83,8 +101,9 @@ async function trashRestore(client: DosyaClient, workspaceId: string, refs: stri
             continue;
         }
         try {
-            // PUT with no body un-deletes the file.
-            await client.put(`/api/files/${encodeURIComponent(match.id)}`);
+            // PUT with no body un-deletes the file or folder.
+            const path = match.kind === "folder" ? "/api/folders/" : "/api/files/";
+            await client.put(`${path}${encodeURIComponent(match.id)}`);
             restored++;
         } catch (err) {
             failures.push({ target: ref, error: (err as Error).message });
@@ -95,20 +114,21 @@ async function trashRestore(client: DosyaClient, workspaceId: string, refs: stri
         printJson({ ok: failures.length === 0, restored, failures });
     } else {
         for (const f of failures) console.error(`Failed: ${f.target}: ${f.error}`);
-        log(`Restored ${restored} file(s).`);
+        log(`Restored ${restored} item${restored === 1 ? "" : "s"}.`);
     }
     if (failures.length > 0) process.exit(EXIT.ERROR);
 }
 
 async function trashEmpty(client: DosyaClient, workspaceId: string, flags: Record<string, string>): Promise<void> {
-    const files = await fetchTrash(client, workspaceId);
-    if (files.length === 0) {
+    const { files, folders } = await fetchTrash(client, workspaceId);
+    const itemCount = files.length + folders.length;
+    if (itemCount === 0) {
         log("Trash is already empty.");
         return;
     }
-    const total = files.reduce((s, f) => s + f.size_bytes, 0);
+    const total = files.reduce((s, f) => s + f.size_bytes, 0) + folders.reduce((s, f) => s + f.total_size_bytes, 0);
     const ok = await confirm(
-        `Permanently delete ${files.length} file(s) (${formatBytes(total)}) from trash? This cannot be undone.`,
+        `Permanently delete ${itemCount} item(s) (${formatBytes(total)}) from trash? This cannot be undone.`,
         { force: flags.force !== undefined },
     );
     if (ok === null) fatal("Cannot prompt for confirmation in non-interactive mode. Use --force to skip.", EXIT.USAGE);
@@ -125,12 +145,23 @@ async function trashEmpty(client: DosyaClient, workspaceId: string, flags: Recor
             failures.push({ target: f.name, error: (err as Error).message });
         }
     }
+    for (const f of folders) {
+        try {
+            // A second DELETE on an already-soft-deleted folder purges it and
+            // everything swept in with it. Without this loop, "empty" left
+            // every trashed folder behind while claiming the trash was empty.
+            await client.del(`/api/folders/${encodeURIComponent(f.id)}`);
+            purged++;
+        } catch (err) {
+            failures.push({ target: f.name, error: (err as Error).message });
+        }
+    }
 
     if (flags.json !== undefined) {
         printJson({ ok: failures.length === 0, purged, failures });
     } else {
         for (const f of failures) console.error(`Failed: ${f.target}: ${f.error}`);
-        log(`Permanently deleted ${purged} file(s).`);
+        log(`Permanently deleted ${purged} item${purged === 1 ? "" : "s"}.`);
     }
     if (failures.length > 0) process.exit(EXIT.ERROR);
 }

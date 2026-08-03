@@ -60,6 +60,13 @@ export class DosyaClient {
     private apiKey: string;
     private defaultTimeout: number;
 
+    /**
+     * Latest D1 bookmark from the API. Echoing it back keeps our reads at least
+     * as fresh as our own last write, now that reads can be served by a replica.
+     * In-memory only and per-process - it is request state, not a credential.
+     */
+    private d1Bookmark: string | null = null;
+
     constructor(apiBase: string, apiKey: string, defaultTimeout = 30_000) {
         this.apiBase = apiBase.replace(/\/$/, "");
         this.apiKey = apiKey;
@@ -108,6 +115,7 @@ export class DosyaClient {
         if (this.isSameOrigin(url)) {
             headers["Authorization"] = `Bearer ${this.apiKey}`;
             headers["X-Dosya-Client"] = "cli";
+            if (this.d1Bookmark) headers["X-D1-Bookmark"] = this.d1Bookmark;
         } else {
             debug(`Omitting credentials for cross-origin request to ${url}`);
         }
@@ -147,6 +155,9 @@ export class DosyaClient {
                 });
 
                 debug(`${method} ${url} → ${response.status}`);
+
+                const bookmark = response.headers.get("x-d1-bookmark");
+                if (bookmark) this.d1Bookmark = bookmark;
 
                 // Auth errors - never retry. A 401 almost always means the key
                 // is bad, so the re-auth hint is the most useful thing to say. A
