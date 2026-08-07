@@ -8,33 +8,79 @@ export function getApiBase(): string {
     return process.env.DOSYA_TEST_API_BASE ?? "https://api.dosya.dev";
 }
 
+interface LiveApiProbe {
+    ok: boolean;
+    reason: string;
+}
+
 /**
- * Integration tests talk to a real API. They are skipped rather than failed
- * when no key is configured or the server isn't up, so `bun test` is
- * meaningful on a clean checkout and in CI.
+ * Integration tests talk to a real API. Skipping is OPT-IN via
+ * DOSYA_SKIP_INTEGRATION=1 rather than automatic, because the automatic
+ * version meant 27 files reported green while executing nothing: the key
+ * lives in apps/cli/.env, CI never sets it, and the skip was announced only
+ * through a console.warn nobody reads.
  *
- * Reachability is probed rather than assumed: `.env` is auto-loaded by Bun, so
- * a key is usually present even when the local dev server is not running.
+ * This function does NOT throw. It used to - but `../helpers` is also
+ * imported by test files that need nothing but `runCli` and have no
+ * live-API dependency at all (completion.test.ts, config.test.ts,
+ * security.test.ts). A throw here failed module evaluation for every file
+ * that imports this module, including those three - not a loud, targeted
+ * error, but a `ReferenceError: Cannot access '...' before initialization`
+ * cascade across every one of them, since bun:test never reached their
+ * describe blocks. The single authoritative "no key and no skip flag" failure
+ * now lives in one place: `tests/integration/_live-api-guard.test.ts`.
  */
-async function probeLiveApi(): Promise<boolean> {
+async function probeLiveApi(): Promise<LiveApiProbe> {
+    if (process.env.DOSYA_SKIP_INTEGRATION === "1") {
+        return { ok: false, reason: "DOSYA_SKIP_INTEGRATION=1 - integration tests skipped on purpose." };
+    }
     if (!process.env.DOSYA_TEST_API_KEY) {
-        console.warn("[tests] DOSYA_TEST_API_KEY not set - skipping integration tests.");
-        return false;
+        return {
+            ok: false,
+            reason:
+                "DOSYA_TEST_API_KEY is not set. Integration tests need a real API.\n" +
+                "  - to run them:  set DOSYA_TEST_API_KEY and DOSYA_TEST_API_BASE\n" +
+                "  - to skip them: set DOSYA_SKIP_INTEGRATION=1",
+        };
     }
     try {
-        // Public endpoint: confirms the server is up without spending auth
         const res = await fetch(`${getApiBase()}/api/cli/version`, {
             signal: AbortSignal.timeout(3000),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return true;
+        return { ok: true, reason: "" };
     } catch (err) {
-        console.warn(`[tests] ${getApiBase()} unreachable (${(err as Error).message}) - skipping integration tests.`);
-        return false;
+        return {
+            ok: false,
+            reason:
+                `${getApiBase()} is unreachable (${(err as Error).message}). ` +
+                "Start the API or set DOSYA_SKIP_INTEGRATION=1.",
+        };
     }
 }
 
-export const LIVE_API = await probeLiveApi();
+const liveApiProbe = await probeLiveApi();
+
+/** True only when a live API was actually reached. Used by every
+ * `describe.skipIf(!LIVE_API)` block in this directory. */
+export const LIVE_API = liveApiProbe.ok;
+
+/** Why LIVE_API is false - empty string when LIVE_API is true. Consumed by
+ * the guard test, `tests/integration/_live-api-guard.test.ts`. */
+export const LIVE_API_REASON = liveApiProbe.reason;
+
+/** True only when the skip was requested on purpose via
+ * DOSYA_SKIP_INTEGRATION=1, as opposed to a missing key or an unreachable
+ * API - the guard test uses this to tell "skip on purpose" apart from
+ * "should have failed". */
+export const LIVE_API_SKIPPED_ON_PURPOSE = process.env.DOSYA_SKIP_INTEGRATION === "1";
+
+// Printed once per run, not once per file: Bun caches this module, so every
+// other file's `import ... from "../helpers"` reuses this evaluation instead
+// of re-running it.
+if (!LIVE_API) {
+    console.warn(`[tests] ${LIVE_API_REASON}`);
+}
 
 export function getClient(): DosyaClient {
     return new DosyaClient(getApiBase(), getApiKey());
