@@ -28,6 +28,52 @@ export function rmHelp(): void {
     console.log(HELP);
 }
 
+/**
+ * Split resolved file targets ahead of deletion: files with a known
+ * workspace batch together (one /api/files/batch-delete call per
+ * workspace); files whose workspace is unknown fall back to singles,
+ * deleted one at a time via DELETE /api/files/:id - the same call
+ * `dosya rm <id>` already makes alone, which needs no workspace at all
+ * because the server looks the file's workspace up itself.
+ *
+ * A bare id resolved with no `-w` flag and no default workspace comes back
+ * from resolver.ts with `workspaceId: ""` (deliberately - a raw id is
+ * globally unique and addressable without a workspace). Grouping those by
+ * that empty string and POSTing `{ workspace_id: "" }` to batch-delete gets
+ * rejected by the server ("workspace_id is required"), which is what made
+ * `dosya rm a b` fail while `dosya rm a; dosya rm b` worked fine.
+ *
+ * A lone target ALWAYS takes the single-DELETE path, even when its
+ * workspace is known. DELETE /api/files/:id enforces a lock_mode check and
+ * (for folder-confined members) an isFileWithinSubtree containment check;
+ * /api/files/batch-delete's bulk UPDATE enforces neither. Routing a single
+ * known-workspace file through batch-delete would silently drop those two
+ * checks - the UPDATE just matches zero rows and the CLI reports success -
+ * so batching only ever happens for genuinely multiple files. This
+ * invariant lives here (not at the call site) so every caller gets it for
+ * free instead of having to remember a `files.length > 1` guard themselves.
+ */
+export function partitionFilesForDelete(files: Resolved[]): { batches: Map<string, string[]>; singles: Resolved[] } {
+    const batches = new Map<string, string[]>();
+    const singles: Resolved[] = [];
+
+    if (files.length <= 1) {
+        singles.push(...files);
+        return { batches, singles };
+    }
+
+    for (const f of files) {
+        if (!f.workspaceId) {
+            singles.push(f);
+            continue;
+        }
+        const list = batches.get(f.workspaceId) ?? [];
+        list.push(f.id);
+        batches.set(f.workspaceId, list);
+    }
+    return { batches, singles };
+}
+
 export async function rm(args: string[], flags: Record<string, string>): Promise<void> {
     if (flags.help !== undefined) { rmHelp(); return; }
 
@@ -74,28 +120,23 @@ export async function rm(args: string[], flags: Record<string, string>): Promise
     let deleted = 0;
     const failures: { target: string; error: string }[] = [];
 
-    // Files: batch-delete when more than one (grouped by workspace), else a
-    // single DELETE (with the second DELETE for --permanent).
+    // Files: batch-delete groups with a known workspace (grouped by
+    // workspace), else a single DELETE per file (with the second DELETE for
+    // --permanent) - including files whose workspace is unknown, which can
+    // never go through the batch endpoint. See partitionFilesForDelete.
     try {
-        if (files.length > 1) {
-            const byWs = new Map<string, string[]>();
-            for (const f of files) {
-                const list = byWs.get(f.workspaceId) ?? [];
-                list.push(f.id);
-                byWs.set(f.workspaceId, list);
+        const { batches, singles } = partitionFilesForDelete(files);
+        for (const [ws, ids] of batches) {
+            const res = await client.post<{ ok: boolean; deleted: number }>(
+                "/api/files/batch-delete",
+                { workspace_id: ws, file_ids: ids },
+            );
+            deleted += res.deleted ?? ids.length;
+            if (isPermanent) {
+                for (const id of ids) await client.del(`/api/files/${encodeURIComponent(id)}`);
             }
-            for (const [ws, ids] of byWs) {
-                const res = await client.post<{ ok: boolean; deleted: number }>(
-                    "/api/files/batch-delete",
-                    { workspace_id: ws, file_ids: ids },
-                );
-                deleted += res.deleted ?? ids.length;
-                if (isPermanent) {
-                    for (const id of ids) await client.del(`/api/files/${encodeURIComponent(id)}`);
-                }
-            }
-        } else if (files.length === 1) {
-            const f = files[0];
+        }
+        for (const f of singles) {
             const res = await client.del<{ ok: boolean; permanent: boolean }>(`/api/files/${encodeURIComponent(f.id)}`);
             if (isPermanent && !res.permanent) {
                 await client.del(`/api/files/${encodeURIComponent(f.id)}`);
