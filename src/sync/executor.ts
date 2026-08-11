@@ -31,6 +31,15 @@ export interface SyncResults {
     deletedRemoteIds: string[];
     /** remoteIds whose action failed - their previous state record is carried forward so the action retries. */
     failedRemoteIds: string[];
+    /**
+     * remoteIds whose upload was skipped by the withheld-subtree guard. They
+     * are absent from the snapshot, so the engine cannot rebuild their state
+     * records from it - it carries the previous records forward instead. That
+     * keeps the file TRACKED, which is what keeps the guard working: an
+     * untracked local file is a legitimately new one, and uploading it creates
+     * whatever folders it needs.
+     */
+    skippedWithheldIds: string[];
 }
 
 export interface ApplyResult {
@@ -166,7 +175,7 @@ export async function applyActions(
     const conflicts = actions.filter(a => a.kind === "conflict").length;
     const results: SyncResults = {
         uploadedNew: [], uploadedVersion: [], downloaded: [], movedLocal: [],
-        deletedRemoteIds: [], failedRemoteIds: [],
+        deletedRemoteIds: [], failedRemoteIds: [], skippedWithheldIds: [],
     };
     const root = pair.local;
     const folderCache = new Map<string, string>(remoteFolderPaths(folders, pair.remoteFolderId));
@@ -205,6 +214,10 @@ export async function applyActions(
     const uploadParents = new Set<string>();
     for (const a of actions) {
         if (a.kind === "upload-new" || a.kind === "upload-update") {
+            // A vanished-remote upload must never cause a folder to be
+            // created, here or in the lazy path below - prewarming its parent
+            // would rebuild the very subtree the guard exists to protect.
+            if (a.kind === "upload-new" && a.remoteVanished) continue;
             const p = parentOf(a.relPath);
             if (p) uploadParents.add(p);
         }
@@ -221,8 +234,37 @@ export async function applyActions(
     const prepared: { relPath: string; full: string; name: string; folderId: string | null }[] = [];
     for (const a of actions) {
         if (a.kind !== "upload-new") continue;
+        const parentPath = parentOf(a.relPath);
+
+        // Fail closed for a file whose remote record vanished: resolve its
+        // folder from what the snapshot actually showed, never by creating it.
+        // A missing folder here means the whole subtree is gone from the
+        // listing, and the two causes - really deleted, or access withdrawn
+        // (hidden / permission-restricted / locked) - are indistinguishable.
+        // Creating it would re-materialise a withheld subtree as fresh,
+        // unrestricted folders and put the content back inside, undoing the
+        // very protection that removed it. Skipping costs one file its upload
+        // until access is restored or the user moves it; guessing wrong costs
+        // the workspace its access controls.
+        if (a.remoteVanished) {
+            const folderId = parentPath === "" ? pair.remoteFolderId : folderCache.get(parentPath) ?? null;
+            if (parentPath !== "" && folderId === null) {
+                if (a.remoteId) results.skippedWithheldIds.push(a.remoteId);
+                failures.push({
+                    action: `upload-new ${a.relPath}`,
+                    error: `skipped: this file was synced before, but neither it nor its folder "${parentPath}" is in the workspace listing any more. `
+                        + `Uploading would re-create that folder as a new, unrestricted one, so the local file was left untouched and nothing was written to the server. `
+                        + `If the folder was hidden, locked or its access revoked, ask the workspace owner; if it was really deleted, move the file to another folder to upload it.`,
+                });
+                debug(`sync: withheld-subtree guard skipped upload of ${a.relPath} (parent "${parentPath}" not in snapshot)`);
+                continue;
+            }
+            prepared.push({ relPath: a.relPath, full: join(root, a.localPath), name: basename(a.relPath), folderId });
+            continue;
+        }
+
         try {
-            const folderId = await ensureRemoteFolder(remote, pair.remoteFolderId, folderCache, parentOf(a.relPath));
+            const folderId = await ensureRemoteFolder(remote, pair.remoteFolderId, folderCache, parentPath);
             prepared.push({ relPath: a.relPath, full: join(root, a.localPath), name: basename(a.relPath), folderId });
         } catch (err) {
             failures.push({ action: `upload-new ${a.relPath}`, error: (err as Error).message });

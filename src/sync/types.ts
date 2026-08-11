@@ -68,7 +68,18 @@ export type SyncProgress =
 export type SyncProgressFn = (ev: SyncProgress) => void;
 
 export type SyncAction =
-    | { kind: "upload-new" | "upload-update"; relPath: string; localPath: string; folderId: string | null; remoteId?: string }
+    /**
+     * `remoteVanished` marks an upload-new that is NOT a new local file: the
+     * file was tracked, and its remote record disappeared from the snapshot.
+     * That happens both when the file is really deleted and when access to it
+     * is withdrawn (a hidden, permission-restricted or locked subtree simply
+     * stops being listed), and the two are indistinguishable from here. The
+     * executor refuses to CREATE missing remote folders for these - see the
+     * guard in applyActions - so an upload can never rebuild a withheld
+     * subtree as fresh, unrestricted folders. `remoteId` carries the id that
+     * vanished, so the engine can keep the file tracked.
+     */
+    | { kind: "upload-new" | "upload-update"; relPath: string; localPath: string; folderId: string | null; remoteId?: string; remoteVanished?: true }
     | { kind: "download-new" | "download-update"; relPath: string; remoteId: string; localPath: string; size?: number }
     | { kind: "delete-local"; localPath: string; remoteId: string; relPath: string }
     | { kind: "delete-remote"; remoteId: string; relPath: string }

@@ -101,6 +101,21 @@ function buildStateFromResults(
         };
     }
 
+    // Uploads the withheld-subtree guard skipped. Their ids are absent from
+    // remoteById - that absence is the whole reason they were skipped - so the
+    // loop above cannot reach them, and without this they would drop out of
+    // state and come back next cycle as untracked local files, which upload
+    // and create their folders like any new file. Carrying the previous record
+    // forward keeps them tracked, so the guard fires again rather than once.
+    // The record is dropped as normal once the local file is gone.
+    for (const id of res.skippedWithheldIds) {
+        const old = prev.files[id];
+        if (!old) continue;
+        const l = scan.entries.get(old.localPath);
+        if (!l || l.isDir) continue;
+        files[id] = old;
+    }
+
     for (const u of res.uploadedNew) {
         const l = scan.entries.get(u.relPath);
         if (!l || l.isDir) continue;

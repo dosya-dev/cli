@@ -118,9 +118,13 @@ export function reconcile(input: ReconcileInput): SyncAction[] {
             processedPaths.add(oldPath);
             processedPaths.add(remote.relPath);
         } else if (!remote && local) {
-            // Remote deleted since last sync.
+            // Remote deleted since last sync - or withheld, which looks the
+            // same from here. `remoteVanished` keeps that distinction from
+            // being lost: the executor must not create the file's remote
+            // folder chain, because doing so would rebuild a withheld subtree
+            // as fresh, unrestricted folders. See SyncAction in ./types.
             if (localChanged(local, rec)) {
-                actions.push({ kind: "upload-new", relPath: oldPath, localPath: oldPath, folderId: null });
+                actions.push({ kind: "upload-new", relPath: oldPath, localPath: oldPath, folderId: null, remoteId, remoteVanished: true });
             } else {
                 actions.push({ kind: "delete-local", localPath: oldPath, remoteId, relPath: oldPath });
             }

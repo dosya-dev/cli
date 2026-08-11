@@ -5,17 +5,17 @@ import { printTable, printJson, fatal, fatalError, log, EXIT } from "../output";
 import { Resolver } from "../resolver";
 import { isValidEmail } from "@dosya-dev/shared";
 
-/** Lock modes accepted by POST /api/files/:id/share. */
+/** Lock modes accepted by POST /api/files/:id/share and /api/folders/:id/share. */
 const LOCK_MODES = ["none", "view_only", "full_lock"] as const;
 
 const HELP = `Create and manage share links on dosya.dev.
 
 Usage:
-  dosya share <file> [flags]              Create a share link
-  dosya share list [flags]                List the workspace's share links
-  dosya share revoke <link_id>            Revoke a share link
-  dosya share email <file> --email <e>    Create a link and email it
-  dosya share bundle <file...> [flags]    Share several files as one link
+  dosya share <file|folder> [flags]           Create a share link for a file or folder
+  dosya share list [flags]                    List the workspace's share links
+  dosya share revoke <link_id>                Revoke a share link
+  dosya share email <file|folder> --email <e> Create a link and email it
+  dosya share bundle <file...> [flags]        Share several files as one link
 
 Create flags:
   --password <pwd>     Password-protect the link
@@ -29,6 +29,7 @@ Shared flags:
 
 Examples:
   dosya share report.pdf --expires 7d --password secret
+  dosya share ./Designs          Share a whole folder - files added later are included
   dosya share list -w ws_abc123
   dosya share revoke lnk_abc123
   dosya share email report.pdf --email a@b.com
@@ -60,7 +61,7 @@ interface ShareLink {
 async function shareCreate(args: string[], flags: Record<string, string>, client: DosyaClient, defaultWorkspace?: string): Promise<void> {
     const target = args[0];
     if (!target) {
-        fatal("File required. Usage: dosya share <file>", EXIT.USAGE);
+        fatal("File or folder required. Usage: dosya share <file|folder>", EXIT.USAGE);
     }
 
     const expiresInDays = parseExpires(flags.expires);
@@ -72,8 +73,8 @@ async function shareCreate(args: string[], flags: Record<string, string>, client
     }
 
     const resolved = await new Resolver(client).resolve(target, { workspace: flags.workspace, defaultWorkspace });
-    if (resolved.type !== "file") {
-        fatal("share creates a link for a file. Use 'dosya share bundle' for many, or share a folder from the web.", EXIT.USAGE);
+    if (resolved.type !== "file" && resolved.type !== "folder") {
+        fatal("share creates a link for a file or a folder. Use 'dosya share bundle' for many files.", EXIT.USAGE);
     }
 
     const body: Record<string, unknown> = {};
@@ -81,10 +82,13 @@ async function shareCreate(args: string[], flags: Record<string, string>, client
     if (expiresInDays) body.expires_in_days = expiresInDays;
     if (flags.lock) body.lock_mode = flags.lock;
 
-    const data = await client.post<{ ok: boolean; link: ShareLink }>(
-        `/api/files/${encodeURIComponent(resolved.id)}/share`,
-        body,
-    );
+    // A folder link resolves its contents at access time, so files added later
+    // are covered too - and hidden or locked items inside it never are.
+    const path = resolved.type === "folder"
+        ? `/api/folders/${encodeURIComponent(resolved.id)}/share`
+        : `/api/files/${encodeURIComponent(resolved.id)}/share`;
+
+    const data = await client.post<{ ok: boolean; link: ShareLink }>(path, body);
 
     if (flags.json !== undefined) {
         printJson(data);
@@ -164,7 +168,7 @@ async function shareRevoke(args: string[], flags: Record<string, string>, client
 async function shareEmail(args: string[], flags: Record<string, string>, client: DosyaClient, defaultWorkspace?: string): Promise<void> {
     const target = args[0];
     if (!target) {
-        fatal("File required. Usage: dosya share email <file> --email <address>", EXIT.USAGE);
+        fatal("File or folder required. Usage: dosya share email <file|folder> --email <address>", EXIT.USAGE);
     }
     if (!flags.email) {
         fatal("Email required. Use --email <address>.", EXIT.USAGE);
@@ -174,16 +178,19 @@ async function shareEmail(args: string[], flags: Record<string, string>, client:
     }
 
     const resolved = await new Resolver(client).resolve(target, { workspace: flags.workspace, defaultWorkspace });
-    if (resolved.type !== "file") fatal("share email targets a file.", EXIT.USAGE);
+    if (resolved.type !== "file" && resolved.type !== "folder") {
+        fatal("share email targets a file or a folder.", EXIT.USAGE);
+    }
 
     const body: Record<string, unknown> = { email: flags.email };
     if (flags.message) body.message = flags.message;
     if (flags.password) body.password = flags.password;
 
-    const data = await client.post<{ ok: boolean; share_url: string }>(
-        `/api/files/${encodeURIComponent(resolved.id)}/share-email`,
-        body,
-    );
+    const path = resolved.type === "folder"
+        ? `/api/folders/${encodeURIComponent(resolved.id)}/share-email`
+        : `/api/files/${encodeURIComponent(resolved.id)}/share-email`;
+
+    const data = await client.post<{ ok: boolean; share_url: string }>(path, body);
 
     if (flags.json !== undefined) printJson(data);
     else log(`Emailed ${flags.email}: ${data.share_url}`);
