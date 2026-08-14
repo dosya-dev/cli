@@ -1,6 +1,7 @@
 import { debug } from "./output";
 import { ApiError, AuthError, NetworkError, httpErrorMessage } from "./errors";
 import { getRequestTimeout } from "./runtime";
+import { DEVICE_ID_HEADER, getDeviceId } from "./device-id";
 
 export { ApiError, AuthError, NetworkError };
 
@@ -115,6 +116,13 @@ export class DosyaClient {
         if (this.isSameOrigin(url)) {
             headers["Authorization"] = `Bearer ${this.apiKey}`;
             headers["X-Dosya-Client"] = "cli";
+            // Only /api/sync/commit reads this today, but it is attached here
+            // rather than at that one call site: the header identifies the
+            // installation, not the endpoint, and a per-call-site attachment is
+            // how the desktop app ended up with two upload paths that omit it.
+            // Same-origin only - the id belongs to dosya.dev's tables and has no
+            // business travelling to a redirect target.
+            headers[DEVICE_ID_HEADER] = getDeviceId();
             if (this.d1Bookmark) headers["X-D1-Bookmark"] = this.d1Bookmark;
         } else {
             debug(`Omitting credentials for cross-origin request to ${url}`);
