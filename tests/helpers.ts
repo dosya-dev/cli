@@ -4,8 +4,45 @@ export function getApiKey(): string {
     return process.env.DOSYA_TEST_API_KEY ?? "";
 }
 
+/**
+ * Where the integration suite points when DOSYA_TEST_API_BASE is unset.
+ *
+ * This used to be `https://api.dosya.dev` - PRODUCTION. These tests create
+ * workspaces, upload files, mint share links and delete things, and they run
+ * with whatever DOSYA_TEST_API_KEY is in scope. The only thing standing
+ * between a `bun test tests/integration` and doing all of that against the
+ * live API was the presence of an untracked, gitignored apps/cli/.env - so
+ * anyone cloning fresh, or anyone whose .env lost its API_BASE line while
+ * keeping its key, got production by default and no warning.
+ *
+ * A local default cannot cause that. If nothing is listening the probe below
+ * fails, the suite reports "unreachable", and the worst outcome is a skipped
+ * run rather than mutations against real accounts. Matches `astro dev --port
+ * 4322` in apps/api's package.json.
+ *
+ * Pointing at production is still possible; it just has to be typed.
+ */
+export const DEFAULT_TEST_API_BASE = "http://localhost:4322";
+
 export function getApiBase(): string {
-    return process.env.DOSYA_TEST_API_BASE ?? "https://api.dosya.dev";
+    return process.env.DOSYA_TEST_API_BASE ?? DEFAULT_TEST_API_BASE;
+}
+
+/**
+ * True when the suite is aimed somewhere other than localhost.
+ *
+ * Not a refusal - running against a deployed environment is legitimate, and
+ * packages/prod-smoke exists for exactly that. It is a LOUD banner, because
+ * the difference between "my tests failed" and "my tests just deleted a real
+ * workspace" should never be something you discover afterwards.
+ */
+export function isRemoteTarget(base = getApiBase()): boolean {
+    try {
+        const { hostname } = new URL(base);
+        return hostname !== "localhost" && hostname !== "127.0.0.1" && hostname !== "[::1]";
+    } catch {
+        return true; // unparseable is not provably local
+    }
 }
 
 interface LiveApiProbe {
@@ -42,6 +79,16 @@ async function probeLiveApi(): Promise<LiveApiProbe> {
                 "  - to run them:  set DOSYA_TEST_API_KEY and DOSYA_TEST_API_BASE\n" +
                 "  - to skip them: set DOSYA_SKIP_INTEGRATION=1",
         };
+    }
+    // Said before the first request, not after the damage. Only when a key is
+    // present and a remote target is configured - i.e. only when this run can
+    // actually mutate something that is not yours.
+    if (isRemoteTarget()) {
+        console.warn(
+            `\n  ⚠  CLI integration tests are pointed at ${getApiBase()}, not localhost.\n` +
+            `     They create workspaces, upload files and delete things with DOSYA_TEST_API_KEY.\n` +
+            `     Unset DOSYA_TEST_API_BASE to use ${DEFAULT_TEST_API_BASE}.\n`,
+        );
     }
     try {
         const res = await fetch(`${getApiBase()}/api/cli/version`, {

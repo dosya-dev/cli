@@ -6,6 +6,8 @@ import { Semaphore } from "../semaphore";
 import { chunkFile } from "./chunker";
 import type { FolderNode } from "../resolver";
 import type { RemoteFile } from "./types";
+import { isSafeRelPath } from "./safe-path";
+import { debug } from "../output";
 
 /** Default concurrent transfers for sync (tunable via config `sync_parallel`). */
 export const DEFAULT_SYNC_PARALLEL = 8;
@@ -110,6 +112,14 @@ export function buildRemotePaths(files: SnapshotFile[], folders: FolderNode[], r
         const parentPath = pathOf(file.folder_id);
         if (parentPath === null) continue; // not under the pair's root
         const relPath = parentPath === "" ? file.name : `${parentPath}/${file.name}`;
+        // Quarantine a snapshot record whose resolved path is not a safe
+        // root-relative path (a hostile ".."/separator/control-char name). Left
+        // in, it would persist into sync state and reach a filesystem sink that
+        // escapes the sync root. See safe-path.ts.
+        if (!isSafeRelPath(relPath)) {
+            debug(`sync: dropping remote file ${file.id} with unsafe path ${JSON.stringify(relPath)}`);
+            continue;
+        }
         out.set(file.id, {
             id: file.id,
             name: file.name,
@@ -129,7 +139,7 @@ export function remoteFolderPaths(folders: FolderNode[], rootFolderId: string | 
     const out = new Map<string, string>();
     for (const f of folders) {
         const p = pathOf(f.id);
-        if (p !== null && p !== "") out.set(p, f.id);
+        if (p !== null && p !== "" && isSafeRelPath(p)) out.set(p, f.id);
     }
     return out;
 }

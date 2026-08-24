@@ -2,6 +2,7 @@ import { createClient } from "../client";
 import { requireAuth } from "../config";
 import { printJson, fatal, fatalError, log, EXIT } from "../output";
 import { parseRef } from "../resolver";
+import { validateFolderPath } from "@dosya-dev/shared";
 
 const HELP = `Create a folder on dosya.dev.
 
@@ -50,6 +51,13 @@ export async function mkdir(args: string[], flags: Record<string, string>): Prom
 
     // The API splits a nested `a/b/c` name and creates each segment idempotently.
     const name = parsed.segments.join("/");
+
+    // The same rules the route applies, named as a usage error rather than a
+    // 400. The CLI already fails closed on unsafe paths coming DOWN from the
+    // server (src/sync/safe-path.ts); this is the outbound half of the same
+    // policy, which until now only existed on the server.
+    const nameProblem = validateFolderPath(name);
+    if (nameProblem) fatal(nameProblem, EXIT.USAGE);
 
     try {
         const res = await client.post<FolderResponse>("/api/folders", {

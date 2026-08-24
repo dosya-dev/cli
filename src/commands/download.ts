@@ -7,6 +7,7 @@ import { ProgressBar } from "../progress";
 import { getLongTimeout, onInterrupt } from "../runtime";
 import { Resolver } from "../resolver";
 import { SyncRemote, buildRemotePaths } from "../sync/remote";
+import { resolveWithinRoot } from "../sync/safe-path";
 import { printJson, fatal, fatalError, log, debug, EXIT } from "../output";
 
 const HELP = `Download a file from dosya.dev.
@@ -663,7 +664,13 @@ async function downloadRecursive(
             try {
                 const u = byId.get(f.id);
                 if (!u) throw new Error("no download url returned");
-                const full = join(outDir, f.relPath);
+                // buildRemotePaths already quarantines a traversal relPath, but
+                // the containment check belongs at the join too: this is the
+                // sink, and a sink that trusts its caller is how the recursive
+                // download became exploitable in the first place. See
+                // sync/safe-path.ts.
+                const full = resolveWithinRoot(outDir, f.relPath);
+                if (!full) throw new Error("refusing unsafe path from server");
                 mkdirSync(dirname(full), { recursive: true });
                 const res = await fetch(u.url, { signal: AbortSignal.timeout(getLongTimeout(600_000)) });
                 // Check res.ok only - touching res.body before Bun.write(res) hangs it.
@@ -744,15 +751,23 @@ export async function download(args: string[], flags: Record<string, string>): P
         // Determine output path
         const outFlag = flags.output;
         let outputPath: string;
+        // meta.name is server-controlled, so landing it in a directory is the
+        // same containment problem as the recursive download. An explicit
+        // --output FILE is the user's own path and is used verbatim.
+        const intoDir = (dir: string): string => {
+            const full = resolveWithinRoot(dir, meta.name);
+            if (!full) fatal(`Server returned an unsafe file name: ${JSON.stringify(meta.name)}`, EXIT.ERROR);
+            return full!;
+        };
         if (outFlag) {
             const outStat = existsSync(outFlag) ? statSync(outFlag) : null;
             if (outStat?.isDirectory()) {
-                outputPath = join(outFlag, meta.name);
+                outputPath = intoDir(outFlag);
             } else {
                 outputPath = outFlag;
             }
         } else {
-            outputPath = join(process.cwd(), meta.name);
+            outputPath = intoDir(process.cwd());
         }
 
         const isJson = flags.json !== undefined;

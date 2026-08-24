@@ -11,6 +11,66 @@ import {
     type ResumableInfo, type UploadedFile,
 } from "../multipart";
 import { printJson, fatal, fatalError, log, debug, EXIT } from "../output";
+import { checkUploadFile, checkBatchFitsQuota, type UploadLimits } from "@dosya-dev/shared";
+
+/** Listing every rejected path in a 5000-file tree is not a report, it is noise. */
+const MAX_LISTED_REJECTIONS = 10;
+
+/**
+ * The workspace's upload rules, or "no rules known" if they cannot be read.
+ *
+ * Failing open is deliberate and is the same choice the web client makes: this
+ * check exists only to move a refusal earlier, so an unreachable endpoint must
+ * restore the old behaviour (upload and let the server decide) rather than
+ * block an upload that would have succeeded.
+ */
+async function fetchUploadLimits(client: DosyaClient, workspaceId: string): Promise<UploadLimits> {
+    try {
+        const res = await client.get<UploadLimits & { ok: boolean }>(
+            `/api/workspaces/${encodeURIComponent(workspaceId)}/upload-limits`,
+        );
+        return {
+            allowed_extensions: res.allowed_extensions ?? null,
+            blocked_extensions: res.blocked_extensions ?? null,
+            max_file_size_gb: res.max_file_size_gb ?? null,
+            storage_remaining_bytes: res.storage_remaining_bytes ?? null,
+        };
+    } catch (err) {
+        debug(`upload-limits unavailable, proceeding without a pre-check: ${String(err)}`);
+        return {};
+    }
+}
+
+interface ScreenedPaths {
+    accepted: string[];
+    rejected: { name: string; reason: string }[];
+    /** Bytes past the remaining space, or 0. A warning, never a refusal. */
+    quotaOver: number;
+}
+
+function screenPaths(paths: string[], limits: UploadLimits): ScreenedPaths {
+    const accepted: string[] = [];
+    const rejected: { name: string; reason: string }[] = [];
+    let total = 0;
+
+    for (const p of paths) {
+        const size = statSync(p).size;
+        const reason = checkUploadFile({ name: basename(p), size }, limits);
+        if (reason) { rejected.push({ name: p, reason }); continue; }
+        accepted.push(p);
+        total += size;
+    }
+
+    const fit = checkBatchFitsQuota(total, limits);
+    return { accepted, rejected, quotaOver: fit.fits ? 0 : fit.over };
+}
+
+function humanBytes(bytes: number): string {
+    const MB = 1_048_576, GB = 1_073_741_824;
+    if (bytes >= GB) return `${(bytes / GB).toFixed(1)} GB`;
+    if (bytes >= MB) return `${(bytes / MB).toFixed(0)} MB`;
+    return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
 
 const HELP = `Upload a file or folder to dosya.dev.
 
@@ -262,6 +322,20 @@ export async function upload(args: string[], flags: Record<string, string>): Pro
     }
 
     if (stat.isFile()) {
+        // One file, one rule check. Cheap here and it saves the multipart
+        // handshake on a file the workspace was never going to accept.
+        const single = screenPaths([filePath], await fetchUploadLimits(client, workspaceId));
+        if (single.rejected.length > 0) {
+            const [only] = single.rejected;
+            if (isJson) {
+                printJson({ ok: false, error: "files_rejected", rejected: single.rejected });
+                process.exit(EXIT.USAGE);
+            }
+            fatal(only.reason, EXIT.USAGE);
+        }
+        if (single.quotaOver > 0 && !isJson) {
+            log(`Warning: this file is about ${humanBytes(single.quotaOver)} larger than the space left in this workspace.`);
+        }
         try {
             let versionOfFileId: string | undefined;
             if (flags["version-of"]) {
@@ -304,6 +378,33 @@ export async function upload(args: string[], flags: Record<string, string>): Pro
     if (allFiles.length === 0) {
         fatal("Directory is empty.");
     }
+
+    // Screen against the workspace's rules before creating a single folder.
+    // `dosya upload -r` on a large tree used to create the whole folder
+    // structure and then refuse file after file, one round trip each; on a
+    // workspace with an extension whitelist that is a long way to travel to
+    // learn the first thing about it.
+    const limits = await fetchUploadLimits(client, workspaceId);
+    const screened = screenPaths(allFiles, limits);
+    if (screened.rejected.length > 0) {
+        if (isJson) {
+            printJson({ ok: false, error: "files_rejected", rejected: screened.rejected });
+            process.exit(EXIT.USAGE);
+        }
+        for (const r of screened.rejected.slice(0, MAX_LISTED_REJECTIONS)) {
+            log(`  skipped ${r.name}: ${r.reason}`);
+        }
+        const extra = screened.rejected.length - MAX_LISTED_REJECTIONS;
+        if (extra > 0) log(`  ...and ${extra} more`);
+    }
+    if (screened.accepted.length === 0) {
+        fatal("Every file was refused by this workspace's upload rules.", EXIT.USAGE);
+    }
+    if (screened.quotaOver > 0) {
+        log(`Warning: this upload is about ${humanBytes(screened.quotaOver)} larger than the space left in this workspace. Some files may be refused.`);
+    }
+    allFiles.length = 0;
+    allFiles.push(...screened.accepted);
 
     if (!isJson) log(`Uploading ${allFiles.length} files...`);
 

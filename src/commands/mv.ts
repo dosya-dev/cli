@@ -2,6 +2,7 @@ import { createClient } from "../client";
 import { requireAuth } from "../config";
 import { printJson, fatal, fatalError, log, EXIT } from "../output";
 import { Resolver, type Resolved } from "../resolver";
+import { validateFileName, validateFolderName } from "@dosya-dev/shared";
 
 const HELP = `Move or rename files and folders on dosya.dev.
 
@@ -52,6 +53,13 @@ export async function mv(args: string[], flags: Record<string, string>): Promise
         // Rename: exactly one source and a bare-name destination.
         if (sources.length === 1 && looksLikeName(dest)) {
             const src = await resolver.resolve(sources[0], opts);
+            // Files cap at 255, folders at 100. Checked after the resolve
+            // because the cap depends on which kind it turned out to be, and
+            // named as a usage error rather than a bare 400. Same function the
+            // route runs. `looksLikeName` already excluded path separators, so
+            // this is catching length and the remaining character policy.
+            const nameProblem = src.type === "file" ? validateFileName(dest) : validateFolderName(dest);
+            if (nameProblem) fatal(nameProblem, EXIT.USAGE);
             if (src.type === "file") {
                 await client.put(`/api/files/${encodeURIComponent(src.id)}/rename`, { name: dest });
             } else {

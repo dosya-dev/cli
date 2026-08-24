@@ -5,6 +5,7 @@ import { getLongTimeout } from "../runtime";
 import { loadConfig } from "../config";
 import { debug } from "../output";
 import { SyncRemote, remoteFolderPaths, DEFAULT_SYNC_PARALLEL, UPLOAD_STREAM_THRESHOLD, type UploadItem } from "./remote";
+import { resolveWithinRoot } from "./safe-path";
 import { DELTA_MAX_BYTES } from "./chunker";
 import { Semaphore } from "../semaphore";
 import type { SyncAction, SyncPair, SyncProgressFn } from "./types";
@@ -366,7 +367,12 @@ export async function applyActions(
             const urls = await remote.downloadUrls(downloads.map(a => a.remoteId));
             const byId = new Map(urls.map(u => [u.fileId, u]));
             await Promise.all(downloads.map(a => sem.run(async () => {
-                const full = join(root, a.localPath);
+                const full = resolveWithinRoot(root, a.localPath);
+                if (!full) {
+                    results.failedRemoteIds.push(a.remoteId);
+                    failures.push({ action: `download ${a.relPath}`, error: `refused: path escapes sync root (${a.localPath})` });
+                    return;
+                }
                 const tmp = `${full}.dosya-partial`;
                 try {
                     const u = byId.get(a.remoteId);
@@ -404,7 +410,12 @@ export async function applyActions(
         const pull: { remoteId: string; relPath: string; size?: number }[] = [];
         for (const a of conflictActions) {
             try {
-                const orig = join(root, a.relPath);
+                const orig = resolveWithinRoot(root, a.relPath);
+                if (!orig) {
+                    results.failedRemoteIds.push(a.remoteId);
+                    failures.push({ action: `conflict ${a.relPath}`, error: `refused: path escapes sync root (${a.relPath})` });
+                    continue;
+                }
                 if (existsSync(orig)) {
                     renameSync(orig, uniqueConflictPath(root, a.relPath));
                 }
@@ -418,7 +429,12 @@ export async function applyActions(
             const urls = await remote.downloadUrls(pull.map(p => p.remoteId));
             const byId = new Map(urls.map(u => [u.fileId, u]));
             await Promise.all(pull.map(p => sem.run(async () => {
-                const full = join(root, p.relPath);
+                const full = resolveWithinRoot(root, p.relPath);
+                if (!full) {
+                    results.failedRemoteIds.push(p.remoteId);
+                    failures.push({ action: `conflict-download ${p.relPath}`, error: `refused: path escapes sync root (${p.relPath})` });
+                    return;
+                }
                 const tmp = `${full}.dosya-partial`;
                 try {
                     const u = byId.get(p.remoteId);
@@ -449,9 +465,15 @@ export async function applyActions(
     for (const a of actions) {
         if (a.kind !== "move-local") continue;
         try {
-            const to = join(root, a.toPath);
+            const to = resolveWithinRoot(root, a.toPath);
+            const from = resolveWithinRoot(root, a.fromPath);
+            if (!to || !from) {
+                results.failedRemoteIds.push(a.remoteId);
+                failures.push({ action: `move-local ${a.fromPath}`, error: `refused: path escapes sync root (${!from ? a.fromPath : a.toPath})` });
+                continue;
+            }
             mkdirSync(dirname(to), { recursive: true });
-            renameSync(join(root, a.fromPath), to);
+            renameSync(from, to);
             results.movedLocal.push({ remoteId: a.remoteId, fromPath: a.fromPath, toPath: a.toPath });
             applied++;
         } catch (err) {
@@ -464,7 +486,13 @@ export async function applyActions(
     for (const a of actions) {
         if (a.kind !== "delete-local") continue;
         try {
-            rmSync(join(root, a.localPath), { force: true });
+            const target = resolveWithinRoot(root, a.localPath);
+            if (!target) {
+                results.failedRemoteIds.push(a.remoteId);
+                failures.push({ action: `delete-local ${a.localPath}`, error: `refused: path escapes sync root (${a.localPath})` });
+                continue;
+            }
+            rmSync(target, { force: true });
             applied++;
         } catch (err) {
             results.failedRemoteIds.push(a.remoteId);

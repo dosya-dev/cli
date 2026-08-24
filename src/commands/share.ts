@@ -3,7 +3,9 @@ import { requireAuth } from "../config";
 import { ApiError } from "../errors";
 import { printTable, printJson, fatal, fatalError, log, EXIT } from "../output";
 import { Resolver } from "../resolver";
-import { isValidEmail } from "@dosya-dev/shared";
+import {
+    isValidEmail, validateSharePassword, validateShareExpiryDays, validateShareBundle,
+} from "@dosya-dev/shared";
 
 /** Lock modes accepted by POST /api/files/:id/share and /api/folders/:id/share. */
 const LOCK_MODES = ["none", "view_only", "full_lock"] as const;
@@ -71,6 +73,15 @@ async function shareCreate(args: string[], flags: Record<string, string>, client
     if (flags.lock === "full_lock" && !flags.password) {
         fatal("--lock full_lock requires --password.", EXIT.USAGE);
     }
+    // Fail before the resolver walks the path and burns a round trip: a short
+    // --password or an --expires past the ceiling is a usage error, and the CLI
+    // knowing that locally is the difference between an instant correction and
+    // a 400 arriving after a directory lookup. Shared with the API, so the
+    // sentence is identical.
+    const pwProblem = validateSharePassword(flags.password, { lockMode: flags.lock });
+    if (pwProblem) fatal(pwProblem, EXIT.USAGE);
+    const expiryProblem = validateShareExpiryDays(expiresInDays);
+    if (expiryProblem) fatal(expiryProblem, EXIT.USAGE);
 
     const resolved = await new Resolver(client).resolve(target, { workspace: flags.workspace, defaultWorkspace });
     if (resolved.type !== "file" && resolved.type !== "folder") {
@@ -201,6 +212,15 @@ async function shareBundle(args: string[], flags: Record<string, string>, client
         fatal("Usage: dosya share bundle <file...>", EXIT.USAGE);
     }
     const expiresInDays = parseExpires(flags.expires);
+    // Before the resolver walks every argument: 101 paths is a usage error, and
+    // finding that out after N lookups is the slow way to learn it.
+    const countProblem = validateShareBundle(args.length);
+    if (countProblem) fatal(countProblem, EXIT.USAGE);
+    const pwProblem = validateSharePassword(flags.password);
+    if (pwProblem) fatal(pwProblem, EXIT.USAGE);
+    const expiryProblem = validateShareExpiryDays(expiresInDays);
+    if (expiryProblem) fatal(expiryProblem, EXIT.USAGE);
+
     const resolver = new Resolver(client);
     const resolved = await resolver.resolveMany(args, { workspace: flags.workspace, defaultWorkspace });
     const nonFile = resolved.find(r => r.type !== "file");
