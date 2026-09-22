@@ -202,6 +202,7 @@ export const EXIT = {
     USAGE: 2,
     AUTH: 3,
     NETWORK: 4,
+    TEMPFAIL: 75,
 } as const;
 
 /**
@@ -232,4 +233,15 @@ export function fatalError(err: unknown): never {
         console.error(err.stack);
     }
     process.exit(code);
+}
+
+/**
+ * Print a warning to stderr.
+ *
+ * Deliberately not gated on `quietMode`: `--quiet` suppresses routine output,
+ * and a warning the user asked not to see is a warning that may as well not
+ * exist. stderr keeps it clear of `--json` consumers on stdout.
+ */
+export function warn(message: string): void {
+    console.error(`warning: ${message}`);
 }

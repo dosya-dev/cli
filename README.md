@@ -22,18 +22,29 @@ bun run build:windows-x64    # Windows x64
 ## Authentication
 
 ```bash
-# Login with API key (get one at dosya.dev/settings/api-keys)
-dosya auth login --key dos_xxxxx
+# Login interactively - the prompt does not echo (get a key at dosya.dev/settings/api-keys)
+dosya auth login
 
-# Or set via environment variable
+# Non-interactive: pipe the key in, or put it in the environment
+echo "$MY_KEY" | dosya auth login --key -
 export DOSYA_API_KEY=dos_xxxxx
 
 # Verify authentication
 dosya whoami
+
+# Log out, and destroy the key server-side while you are at it
+dosya auth logout --revoke
 ```
 
+Passing the key as an argument (`--key dos_xxxxx`) works, and the CLI warns when
+you do: the value is written verbatim to your shell history and is visible to
+anyone who can list processes on the machine. Prefer `DOSYA_API_KEY` or `--key -`
+for anything scripted.
+
 Credentials are stored in `~/.dosya/config.json` (mode `0600`), or under
-`$XDG_CONFIG_HOME/dosya/` when that variable is set.
+`$XDG_CONFIG_HOME/dosya/` when that variable is set. The file holds the key in
+plain text - the same design `gh`, `aws` and `npm` use - so the CLI warns if its
+permissions ever loosen to let other users on the machine read it.
 
 The API base URL defaults to `https://api.dosya.dev` and can be overridden with
 `DOSYA_API_BASE` or `dosya config set api_base <url>`.
@@ -221,7 +232,7 @@ Worked examples that combine several commands.
 ### First-run setup
 
 ```bash
-dosya auth login --key dos_xxxxx
+dosya auth login
 dosya workspace list                         # copy the workspace id you want
 dosya config set default_workspace ws_abc123 # now you can drop -w / ws_…: everywhere
 dosya whoami

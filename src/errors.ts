@@ -6,9 +6,20 @@
  */
 
 export class AuthError extends Error {
-    constructor(message: string) {
+    /**
+     * The status that produced it, when there was one.
+     *
+     * 401 and 403 both mean "refused", but only 401 means the credential is
+     * dead. A key turned away by an IP allowlist or an active-hours window is
+     * still live, and callers that clean up after a dead key (see
+     * `auth logout --revoke`) must not treat the two the same.
+     */
+    readonly status?: number;
+
+    constructor(message: string, status?: number) {
         super(message);
         this.name = "AuthError";
+        this.status = status;
     }
 }
 
@@ -23,10 +34,42 @@ export class NetworkError extends Error {
 export class ApiError extends Error {
     readonly status: number;
 
-    constructor(message: string, status: number) {
+    /**
+     * The server's stable `error_code`, when it sent one.
+     *
+     * A status alone cannot separate "wait, then try again" from "this will
+     * never work": `/api/upload/init` answers a workspace's concurrent-upload
+     * ceiling with a 400, the same status a blocked file extension gets, and
+     * the only thing telling them apart used to be the English sentence.
+     * Matching on prose breaks the first time it is reworded, so the retry
+     * decision keys off this instead. Undefined for every response that does
+     * not carry one, which is most of them.
+     */
+    readonly code?: string;
+
+    constructor(message: string, status: number, code?: string) {
         super(message);
         this.name = "ApiError";
         this.status = status;
+        this.code = code;
+    }
+}
+
+/**
+ * A gated surface (e.g. the CLI) was switched off by an admin "platform
+ * switch". The server answers with HTTP 503 and a structured body; this
+ * carries that body through so `index.ts` can print the operator's own
+ * `message` instead of a generic one, and `--json` callers get the raw body.
+ */
+export class MaintenanceError extends Error {
+    readonly surface: string;
+    readonly body: Record<string, unknown>;
+
+    constructor(surface: string, message: string | null, body: Record<string, unknown>) {
+        super(message ?? "Paused for maintenance");
+        this.name = "MaintenanceError";
+        this.surface = surface;
+        this.body = body;
     }
 }
 

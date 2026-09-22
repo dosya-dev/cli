@@ -1,7 +1,7 @@
 import { setOutputFlags, EXIT } from "./output";
 import { parseArgs } from "./parse-args";
 import { setRequestTimeout, runCleanup } from "./runtime";
-import { AuthError, NetworkError } from "./errors";
+import { AuthError, NetworkError, MaintenanceError } from "./errors";
 import pkg from "../package.json";
 
 const VERSION = pkg.version;
@@ -62,6 +62,7 @@ Environment variables:
 
 Exit codes:
   0 success   1 error   2 usage   3 auth failure   4 network failure
+  75 paused for maintenance
 
 Run 'dosya <command> --help' for command-specific help.
 
@@ -108,9 +109,13 @@ async function main(): Promise<void> {
         switch (command) {
             case "auth": {
                 const { login, logout, authHelp } = await import("./commands/auth");
+                // Checked BEFORE the subcommands: `auth logout --help` used to
+                // log the user out and print nothing, because the dispatcher
+                // matched the subcommand first. Asking a destructive command to
+                // explain itself must never perform it.
+                if (flags.help !== undefined || sub === undefined) { authHelp(); process.exit(0); }
                 if (sub === "login") return await login(flags);
-                if (sub === "logout") return await logout();
-                if (flags.help !== undefined || sub === undefined) { authHelp(); process.exit(sub ? EXIT.USAGE : 0); }
+                if (sub === "logout") return await logout(flags);
                 console.error(`Unknown subcommand: auth ${sub}. Usage: dosya auth login|logout`);
                 process.exit(EXIT.USAGE);
                 break;
@@ -271,6 +276,15 @@ async function main(): Promise<void> {
         }
     } catch (err) {
         runCleanup();
+
+        if (err instanceof MaintenanceError) {
+            if (flags.json !== undefined) { console.error(JSON.stringify(err.body)); process.exit(EXIT.TEMPFAIL); }
+            const label = err.surface === "cli" ? "The dosya CLI" : "dosya.dev";
+            console.error(`✗ ${label} is paused for maintenance.`);
+            if (err.message && err.message !== "Paused for maintenance") console.error(`  ${err.message}`);
+            console.error("\n  Nothing was uploaded or changed. Run the same command again later,\n  or watch https://status.dosya.dev for updates.");
+            process.exit(EXIT.TEMPFAIL);
+        }
 
         const message = err instanceof Error ? err.message : String(err);
         console.error(`error: ${message}`);

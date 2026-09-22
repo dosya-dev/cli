@@ -1,7 +1,7 @@
 import { homedir } from "os";
 import { join } from "path";
-import { mkdirSync, existsSync, chmodSync, unlinkSync, renameSync, writeFileSync } from "fs";
-import { EXIT } from "./output";
+import { mkdirSync, existsSync, chmodSync, unlinkSync, renameSync, writeFileSync, statSync } from "fs";
+import { EXIT, warn } from "./output";
 
 export interface DosyaConfig {
     api_key: string;
@@ -40,10 +40,47 @@ function ensureDir(): void {
     }
 }
 
+/**
+ * Warn once when the config file is readable by anyone but its owner.
+ *
+ * `saveConfig` creates the file 0600, but nothing keeps it there: restoring a
+ * backup, `cp -r ~/.dosya`, extracting a tarball, or a home directory synced to
+ * a cloud provider all reinstate the umask default and hand the API key to
+ * every other account on the machine. Reading such a file silently is how the
+ * write-side hardening above quietly stops mattering.
+ *
+ * A warning rather than a refusal: unlike ssh, we are not the thing being
+ * authenticated, and hard-failing here would strand anyone mid-script with no
+ * way to finish the command they ran.
+ */
+let permissionsWarned = false;
+
+function warnIfLoosePermissions(): void {
+    // Windows file modes are synthesised from the read-only attribute, so the
+    // group/other bits are always set and this check would cry wolf forever.
+    if (process.platform === "win32" || permissionsWarned) return;
+
+    const stat = statSync(CONFIG_FILE, { throwIfNoEntry: false });
+    if (!stat) return;
+
+    const mode = stat.mode & 0o777;
+    if ((mode & 0o077) === 0) return;
+
+    permissionsWarned = true;
+    warn(
+        `${CONFIG_FILE} is readable by other users (mode ${mode.toString(8).padStart(4, "0")}). ` +
+        `It holds your API key. Run: chmod 600 ${CONFIG_FILE}`,
+    );
+}
+
 export async function loadConfig(): Promise<DosyaConfig | null> {
     try {
         const text = await Bun.file(CONFIG_FILE).text();
-        return JSON.parse(text) as DosyaConfig;
+        const parsed = JSON.parse(text) as DosyaConfig;
+        // Only after a successful parse - warning about the mode of a file we
+        // could not read is noise on top of the real error.
+        warnIfLoosePermissions();
+        return parsed;
     } catch {
         return null;
     }

@@ -44,6 +44,11 @@ export function startFakeSyncApi(): FakeSyncApi {
     const files = new Map<string, FakeFile>();
     const folders = new Map<string, FakeFolder>();
     const objects = new Map<string, Uint8Array>();
+    // The size each presigned PUT was issued for. The real server signs it
+    // into the URL as Content-Length (apps/api src/lib/r2-presign.ts), so R2
+    // 403s a PUT whose Content-Length differs or is missing - modelled here so
+    // the CLI's upload path is proven to send exactly the declared length.
+    const declaredSize = new Map<string, number>();
     const sessions = new Map<string, { file_id: string | null; name: string; folder_id: string | null; content_type: string; ext: string | null }>();
     let clock = 1000;
     let seq = 0;
@@ -99,7 +104,21 @@ export function startFakeSyncApi(): FakeSyncApi {
                 return new Response("boom", { status: 500 });
             }
             if (method === "PUT" && path.startsWith("/r2put/")) {
-                objects.set(path.slice("/r2put/".length), new Uint8Array(await req.arrayBuffer()));
+                const key = path.slice("/r2put/".length);
+                const body = new Uint8Array(await req.arrayBuffer());
+                // This fake is installed as globalThis.fetch, so no transport
+                // ever adds a Content-Length header here. The real transport
+                // (Bun's fetch) derives it from the buffered body - probed:
+                // `content-length: <byteLength>`, including 0 - so the body's
+                // length IS the Content-Length R2 checks against the signed
+                // value, and an explicit header, when a caller sets one, must
+                // agree with both.
+                const declared = declaredSize.get(key);
+                const explicit = req.headers.get("content-length");
+                if (declared !== undefined && (body.byteLength !== declared || (explicit !== null && explicit !== String(declared)))) {
+                    return new Response("<Error><Code>SignatureDoesNotMatch</Code></Error>", { status: 403 });
+                }
+                objects.set(key, body);
                 return new Response("", { status: 200 });
             }
             if (method === "GET" && path.startsWith("/r2get/")) {
@@ -136,9 +155,15 @@ export function startFakeSyncApi(): FakeSyncApi {
                     // A file named "*BOOM*" gets a presigned URL that 500s on PUT,
                     // so tests can force a single-file upload failure deterministically.
                     const url = f.name.includes("BOOM") ? `${base}/r2fail` : `${base}/r2put/${fileId}`;
+                    // A file named "*GROWN*" is issued for one byte less than it
+                    // holds - exactly what the server issues for a file that was
+                    // appended to between the scan's stat() and the PUT - so a
+                    // test can show the signed Content-Length refusing it.
+                    const size = f.name.includes("GROWN") ? Math.max(0, f.size - 1) : f.size;
+                    declaredSize.set(fileId, size);
                     return {
                         relPath: f.relPath, fileId, r2Key: `key/${fileId}`, name: f.name,
-                        url, size: f.size, folderId: f.folder_id,
+                        url, size, folderId: f.folder_id,
                         contentType: "application/octet-stream", ext: f.name.includes(".") ? f.name.slice(f.name.lastIndexOf(".")) : null,
                     };
                 });

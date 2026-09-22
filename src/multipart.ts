@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync, unlinkSync, renameSync, statSync } from "fs";
 import type { DosyaClient } from "./client";
-import type { ProgressBar } from "./progress";
+import type { FileProgress } from "./progress";
 import { debug } from "./output";
 
 /**
@@ -154,7 +154,7 @@ export interface MultipartOptions {
     resumable: ResumableInfo;
     /** Max parts in flight. Peak memory is roughly this times part_size. */
     concurrency: number;
-    bar: ProgressBar | null;
+    bar: FileProgress | null;
     /** Verify each part against the etag R2 returns (default true). */
     verify?: boolean;
     /**

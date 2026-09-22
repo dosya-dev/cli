@@ -245,6 +245,36 @@ describe("sync large trees (server batch caps)", () => {
         }
     });
 
+    it("a file that changed size since the manifest is refused at the PUT, reported, and the rest still land", async () => {
+        // The server now signs the declared size into each presigned PUT as
+        // Content-Length, so R2 refuses a body of any other length. A file
+        // appended to between scan and upload must fail as ONE per-file error
+        // the next cycle retries - never crash the cycle or land torn bytes.
+        process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "dosya-sync-grown-cfg-"));
+        const root = mkdtempSync(join(tmpdir(), "dosya-sync-grown-src-"));
+        const api = startFakeSyncApi();
+        api.install();
+        try {
+            for (const name of ["a.txt", "GROWN.log", "b.txt"]) {
+                writeFileSync(join(root, name), `body ${name}`);
+            }
+            const client = new DosyaClient(api.base, "dos_test");
+            const pair: SyncPair = {
+                id: "p_grown", local: root, remoteWorkspaceId: "ws_test", remoteFolderId: null,
+                syncMode: "push", conflictStrategy: "last-write-wins", excludes: [], pollIntervalMs: 15000,
+            };
+            const res = await runCycle(client, pair, false);
+            expect(res.applied).toBe(2);
+            expect(res.failures).toHaveLength(1);
+            expect(res.failures[0].action).toContain("GROWN.log");
+            expect(res.failures[0].error).toContain("403");
+            expect([...api.paths().keys()].sort()).toEqual(["a.txt", "b.txt"]);
+        } finally {
+            api.stop();
+            rmSync(root, { recursive: true, force: true });
+        }
+    });
+
     it("a single failed upload is reported but does not abort the batch", async () => {
         process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "dosya-sync-fail-cfg-"));
         const root = mkdtempSync(join(tmpdir(), "dosya-sync-fail-src-"));

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, statSync } from "fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, statSync, chmodSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { runCli } from "../helpers";
@@ -127,5 +127,57 @@ describe("usage errors exit with code 2", () => {
 
         expect(exitCode).toBe(2);
         expect(stderr).toContain("Invalid --lock");
+    });
+});
+
+/**
+ * `0600` on write protects nothing if the CLI happily reads a file that lost
+ * those bits afterwards - restoring from a backup, `cp -r ~/.dosya`, extracting
+ * a tarball, or letting a home directory sync to a cloud provider all land the
+ * API key at `0644` with no complaint. ssh hard-fails here; warning is the
+ * friendly version of the same check.
+ */
+describe.skipIf(process.platform === "win32")("loose config permissions are reported", () => {
+    const configPath = () => join(configHome, "dosya", "config.json");
+
+    it("warns on stderr when the config file is world-readable", async () => {
+        chmodSync(configPath(), 0o644);
+
+        const { stderr, exitCode } = await runCli(["config", "get"], {
+            XDG_CONFIG_HOME: configHome,
+        });
+
+        expect(exitCode).toBe(0);
+        expect(stderr).toContain("readable by other users");
+        expect(stderr).toContain("chmod 600");
+        expect(stderr).toContain(configPath());
+    });
+
+    it("warns when the file is group-readable but not world-readable", async () => {
+        chmodSync(configPath(), 0o640);
+
+        const { stderr } = await runCli(["config", "get"], { XDG_CONFIG_HOME: configHome });
+
+        expect(stderr).toContain("readable by other users");
+    });
+
+    it("stays silent when the file is owner-only", async () => {
+        chmodSync(configPath(), 0o600);
+
+        const { stderr } = await runCli(["config", "get"], { XDG_CONFIG_HOME: configHome });
+
+        expect(stderr).not.toContain("readable by other users");
+    });
+
+    /** The warning must not land on stdout, or it breaks `--json` consumers. */
+    it("keeps --json output parseable while warning", async () => {
+        chmodSync(configPath(), 0o644);
+
+        const { stdout, stderr } = await runCli(["config", "get", "--json"], {
+            XDG_CONFIG_HOME: configHome,
+        });
+
+        expect(stderr).toContain("readable by other users");
+        expect(JSON.parse(stdout).api_key).toBe("<redacted>");
     });
 });

@@ -1,9 +1,9 @@
 import { debug } from "./output";
-import { ApiError, AuthError, NetworkError, httpErrorMessage } from "./errors";
+import { ApiError, AuthError, MaintenanceError, NetworkError, httpErrorMessage } from "./errors";
 import { getRequestTimeout } from "./runtime";
 import { DEVICE_ID_HEADER, getDeviceId } from "./device-id";
 
-export { ApiError, AuthError, NetworkError };
+export { ApiError, AuthError, MaintenanceError, NetworkError };
 
 /** Build a client that honours the global `--timeout` flag. */
 export function createClient(apiBase: string, apiKey: string): DosyaClient {
@@ -93,12 +93,17 @@ export class DosyaClient {
      * non-JSON body on a 4xx also hints that the API base may be wrong (the
      * classic "pointed at dosya.dev instead of api.dosya.dev → 404 HTML" trap).
      */
-    private async errorData(response: Response): Promise<{ error?: string }> {
+    private async errorData(response: Response): Promise<{ error?: string; code?: string; raw?: Record<string, unknown> }> {
         const contentType = response.headers.get("content-type") ?? "";
         if (contentType.includes("application/json")) {
-            const body = await response.json().catch(() => null) as { error?: string } | null;
-            const msg = typeof body?.error === "string" ? body.error.trim() : "";
-            return msg ? { error: msg } : {};
+            const body = await response.json().catch(() => null) as Record<string, unknown> | null;
+            const msg = typeof body?.error === "string" ? (body.error as string).trim() : "";
+            const code = typeof body?.code === "string" ? (body.code as string) : undefined;
+            return {
+                ...(msg ? { error: msg } : {}),
+                ...(code ? { code } : {}),
+                ...(body ? { raw: body } : {}),
+            };
         }
         await response.body?.cancel().catch(() => {});
         const base = httpErrorMessage(response.status);
@@ -174,11 +179,11 @@ export class DosyaClient {
                 // message instead of hiding it behind a generic string.
                 if (response.status === 401) {
                     await response.body?.cancel().catch(() => {});
-                    throw new AuthError("Authentication failed. Run 'dosya auth login' to re-authenticate.");
+                    throw new AuthError("Authentication failed. Run 'dosya auth login' to re-authenticate.", 401);
                 }
                 if (response.status === 403) {
                     const { error } = await this.errorData(response);
-                    throw new AuthError(error || httpErrorMessage(403));
+                    throw new AuthError(error || httpErrorMessage(403), 403);
                 }
 
                 // Rate limited. The request was rejected, not processed, so
@@ -200,18 +205,37 @@ export class DosyaClient {
                     return { ok: false, status: response.status, data, headers: response.headers };
                 }
 
+                // A gated surface (e.g. the CLI) switched off by an admin
+                // "platform switch" answers 503 with a structured body. Read it
+                // once here, before the generic 5xx retry, so a paused surface
+                // fails fast instead of burning three retries against a switch
+                // that will not flip back within this process's lifetime. When
+                // it is a 503 for some other reason, the parsed result is
+                // reused below instead of reading the body a second time (a
+                // Response body can only be consumed once).
+                let maintenanceCheck: { error?: string; code?: string; raw?: Record<string, unknown> } | null = null;
+                if (response.status === 503) {
+                    maintenanceCheck = await this.errorData(response);
+                    if (maintenanceCheck.code === "surface_disabled") {
+                        const raw = maintenanceCheck.raw ?? {};
+                        const surface = typeof raw.surface === "string" ? raw.surface : "cli";
+                        const message = typeof raw.message === "string" ? raw.message : null;
+                        throw new MaintenanceError(surface, message, raw);
+                    }
+                }
+
                 // Retry 5xx where the method allows it
                 if (response.status >= 500 && canReplay && attempt < maxRetries) {
                     lastError = new Error(`Server error: ${response.status}`);
                     debug(`Retrying in ${RETRY_DELAYS[attempt]}ms...`);
-                    await response.body?.cancel().catch(() => {});
+                    if (!maintenanceCheck) await response.body?.cancel().catch(() => {});
                     await Bun.sleep(RETRY_DELAYS[attempt]);
                     continue;
                 }
 
                 // A 5xx we won't retry further - normalize to a clear message too.
                 if (response.status >= 500) {
-                    const data = await this.errorData(response) as T;
+                    const data = (maintenanceCheck ?? await this.errorData(response)) as T;
                     return { ok: false, status: response.status, data, headers: response.headers };
                 }
 
@@ -228,6 +252,7 @@ export class DosyaClient {
             } catch (err) {
                 // Re-throw typed errors immediately
                 if (err instanceof AuthError) throw err;
+                if (err instanceof MaintenanceError) throw err;
 
                 // Classify the error
                 if (err instanceof DOMException && err.name === "TimeoutError") {
@@ -259,9 +284,10 @@ export class DosyaClient {
     /** Unwrap a response, turning a non-2xx into a typed ApiError. */
     private unwrap<T>(res: ApiResponse<T>): T {
         if (!res.ok) {
-            const err = res.data as { error?: string };
+            const err = res.data as { error?: string; error_code?: unknown };
             const msg = typeof err?.error === "string" && err.error.trim() ? err.error.trim() : httpErrorMessage(res.status);
-            throw new ApiError(msg, res.status);
+            const code = typeof err?.error_code === "string" && err.error_code ? err.error_code : undefined;
+            throw new ApiError(msg, res.status, code);
         }
         return res.data;
     }

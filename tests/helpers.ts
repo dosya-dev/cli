@@ -146,7 +146,25 @@ let configCounter = 0;
  * Run the CLI as a subprocess and capture output.
  * Returns stdout, stderr, and exit code.
  */
-export async function runCli(args: string[], env?: Record<string, string>): Promise<{
+export interface RunCliOptions {
+    /** Piped to the process on stdin. Absent means an empty, non-TTY stdin. */
+    stdin?: string;
+    /**
+     * Variables to remove from the child environment.
+     *
+     * Spreading `env` cannot express this: the credential-precedence tests need
+     * DOSYA_API_KEY *absent*, and a developer with DOSYA_TEST_API_KEY exported
+     * would otherwise have it injected by the branch above and silently
+     * outrank the config file the test just wrote.
+     */
+    unsetEnv?: string[];
+}
+
+export async function runCli(
+    args: string[],
+    env?: Record<string, string>,
+    opts: RunCliOptions = {},
+): Promise<{
     stdout: string;
     stderr: string;
     exitCode: number;
@@ -162,9 +180,13 @@ export async function runCli(args: string[], env?: Record<string, string>): Prom
     if (apiKey) baseEnv.DOSYA_API_KEY = apiKey;
     else delete baseEnv.DOSYA_API_KEY;
 
+    const childEnv = { ...baseEnv, ...env };
+    for (const name of opts.unsetEnv ?? []) delete childEnv[name];
+
     const proc = Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
         cwd: import.meta.dir + "/..",
-        env: { ...baseEnv, ...env },
+        env: childEnv,
+        stdin: opts.stdin === undefined ? "ignore" : new TextEncoder().encode(opts.stdin),
         stdout: "pipe",
         stderr: "pipe",
     });

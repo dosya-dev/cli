@@ -50,6 +50,7 @@ const VALUE_FLAGS = new Set([
 
 /** Flags that take no value. */
 const BOOLEAN_FLAGS = new Set([
+    "contents",
     "daemon",
     "debug",
     "dry-run",
@@ -62,6 +63,7 @@ const BOOLEAN_FLAGS = new Set([
     "permanent",
     "quiet",
     "recursive",
+    "revoke",
     "version",
     "watch",
     "zip",
