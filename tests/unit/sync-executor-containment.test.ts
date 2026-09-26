@@ -5,7 +5,7 @@
  * be refused and reported as a failure, leaving files outside the root intact.
  */
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "fs";
+import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, symlinkSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { applyActions } from "../../src/sync/executor";
@@ -70,6 +70,28 @@ describe("applyActions path containment", () => {
         const res = await applyActions(fakeRemote, pair, actions, [], undefined);
 
         expect(existsSync(moveDest)).toBe(false);
+        expect(res.applied).toBe(0);
+        expect(res.failures.length).toBe(1);
+    });
+
+    it("refuses a download through a pre-existing directory symlink that escapes the root", async () => {
+        // The victim has a directory symlink inside the sync root pointing to a
+        // sibling directory outside it. The local scanner skips symlinks, so the
+        // alias is never in the inventory; a remote-controlled "alias/<name>"
+        // then reconciles as a download-new. Lexically "alias/victim.txt" stays
+        // under the root, so only the real-path gate can stop the escape.
+        const outsideDir = join(base, "outside-dir");
+        mkdirSync(outsideDir, { recursive: true });
+        const outsideFile = join(outsideDir, "victim.txt");
+        writeFileSync(outsideFile, "ORIGINAL", "utf8");
+        symlinkSync(outsideDir, join(root, "alias"), "dir");
+
+        const actions: SyncAction[] = [
+            { kind: "download-new", relPath: "alias/victim.txt", remoteId: "f1", localPath: "alias/victim.txt", size: POC_BYTES.length },
+        ];
+        const res = await applyActions(fakeRemote, pair, actions, [], undefined);
+
+        expect(readFileSync(outsideFile, "utf8")).toBe("ORIGINAL");
         expect(res.applied).toBe(0);
         expect(res.failures.length).toBe(1);
     });

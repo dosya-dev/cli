@@ -7,7 +7,7 @@ import { ProgressBar } from "../progress";
 import { getLongTimeout, onInterrupt } from "../runtime";
 import { Resolver } from "../resolver";
 import { SyncRemote, buildRemotePaths } from "../sync/remote";
-import { resolveWithinRoot } from "../sync/safe-path";
+import { resolveRealWithinRoot } from "../sync/safe-path";
 import { printJson, fatal, fatalError, log, debug, EXIT } from "../output";
 
 const HELP = `Download a file from dosya.dev.
@@ -669,7 +669,7 @@ async function downloadRecursive(
                 // sink, and a sink that trusts its caller is how the recursive
                 // download became exploitable in the first place. See
                 // sync/safe-path.ts.
-                const full = resolveWithinRoot(outDir, f.relPath);
+                const full = resolveRealWithinRoot(outDir, f.relPath);
                 if (!full) throw new Error("refusing unsafe path from server");
                 mkdirSync(dirname(full), { recursive: true });
                 const res = await fetch(u.url, { signal: AbortSignal.timeout(getLongTimeout(600_000)) });
@@ -755,7 +755,7 @@ export async function download(args: string[], flags: Record<string, string>): P
         // same containment problem as the recursive download. An explicit
         // --output FILE is the user's own path and is used verbatim.
         const intoDir = (dir: string): string => {
-            const full = resolveWithinRoot(dir, meta.name);
+            const full = resolveRealWithinRoot(dir, meta.name);
             if (!full) fatal(`Server returned an unsafe file name: ${JSON.stringify(meta.name)}`, EXIT.ERROR);
             return full!;
         };
