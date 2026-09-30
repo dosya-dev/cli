@@ -16,9 +16,10 @@ export function loadState(pairId: string): SyncPairState {
             lastFullSyncAt: parsed.lastFullSyncAt ?? 0,
             files: parsed.files ?? {},
             folders: parsed.folders ?? {},
+            permanentFailures: parsed.permanentFailures ?? {},
         };
     } catch {
-        return { pairId, lastFullSyncAt: 0, files: {}, folders: {} };
+        return { pairId, lastFullSyncAt: 0, files: {}, folders: {}, permanentFailures: {} };
     }
 }
 

@@ -3,6 +3,7 @@ import { requireAuth } from "../config";
 import { ApiError } from "../errors";
 import { printTable, printJson, fatal, fatalError, log, EXIT } from "../output";
 import { Resolver } from "../resolver";
+import { applyStripMetadataFlag } from "./share-flags";
 import {
     isValidEmail, validateSharePassword, validateShareExpiryDays, validateShareBundle,
 } from "@dosya-dev/shared";
@@ -23,6 +24,7 @@ Create flags:
   --password <pwd>     Password-protect the link
   --expires <days>     Expiration (e.g. "7d" or "30")
   --lock <mode>        Lock mode: none, view_only, full_lock (full_lock needs --password)
+  --strip-metadata     Serve photos without location, camera and capture-time metadata
 
 Shared flags:
   --workspace, -w <id> Workspace for path lookups / listing
@@ -31,6 +33,7 @@ Shared flags:
 
 Examples:
   dosya share report.pdf --expires 7d --password secret
+  dosya share beach.jpg --strip-metadata   The recipient gets the photo without its GPS position
   dosya share ./Designs          Share a whole folder - files added later are included
   dosya share list -w ws_abc123
   dosya share revoke lnk_abc123
@@ -92,6 +95,7 @@ async function shareCreate(args: string[], flags: Record<string, string>, client
     if (flags.password) body.password = flags.password;
     if (expiresInDays) body.expires_in_days = expiresInDays;
     if (flags.lock) body.lock_mode = flags.lock;
+    applyStripMetadataFlag(body, flags);
 
     // A folder link resolves its contents at access time, so files added later
     // are covered too - and hidden or locked items inside it never are.
@@ -196,6 +200,7 @@ async function shareEmail(args: string[], flags: Record<string, string>, client:
     const body: Record<string, unknown> = { email: flags.email };
     if (flags.message) body.message = flags.message;
     if (flags.password) body.password = flags.password;
+    applyStripMetadataFlag(body, flags);
 
     const path = resolved.type === "folder"
         ? `/api/folders/${encodeURIComponent(resolved.id)}/share-email`
@@ -229,6 +234,7 @@ async function shareBundle(args: string[], flags: Record<string, string>, client
     const body: Record<string, unknown> = { file_ids: resolved.map(r => r.id) };
     if (expiresInDays) body.expires_in_days = expiresInDays;
     if (flags.password) body.password = flags.password;
+    applyStripMetadataFlag(body, flags);
 
     const data = await client.post<{ ok: boolean; link: ShareLink & { file_count: number } }>(
         "/api/files/share-bundle",

@@ -34,6 +34,12 @@ describe("parseArgs", () => {
         expect(result.flags.debug).toBe("");
     });
 
+    it("treats --strip-metadata as boolean, never swallowing the file that follows", () => {
+        const result = parseArgs(["share", "--strip-metadata", "beach.jpg"]);
+        expect(result.flags["strip-metadata"]).toBe("");
+        expect(result.args).toEqual(["share", "beach.jpg"]);
+    });
+
     it("should parse long flags with values", () => {
         const result = parseArgs(["--key", "dos_abc123"]);
         expect(result.flags.key).toBe("dos_abc123");

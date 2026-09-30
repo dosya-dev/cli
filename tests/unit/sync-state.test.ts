@@ -14,7 +14,7 @@ const sampleRecord: SyncFileRecord = {
 describe("sync per-pair state", () => {
     it("round-trips through save/load", () => {
         process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "dosya-sync-state-"));
-        saveState({ pairId: "pX", lastFullSyncAt: 5, files: { r1: sampleRecord }, folders: {} });
+        saveState({ pairId: "pX", lastFullSyncAt: 5, files: { r1: sampleRecord }, folders: {}, permanentFailures: {} });
         const s = loadState("pX");
         expect(s.lastFullSyncAt).toBe(5);
         expect(s.files.r1.remoteName).toBe("a.txt");

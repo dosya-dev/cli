@@ -96,10 +96,10 @@ _dosya_completions() {
             ;;
         member)
             if [[ "\${COMP_WORDS[2]}" == "" ]] || [[ $COMP_CWORD -eq 2 ]]; then
-                COMPREPLY=( $(compgen -W "list invite --help" -- "$cur") )
+                COMPREPLY=( $(compgen -W "list roles invite --help" -- "$cur") )
             else
                 case "\${COMP_WORDS[2]}" in
-                    list)   COMPREPLY=( $(compgen -W "--workspace -w --json -j --help" -- "$cur") ) ;;
+                    list|roles) COMPREPLY=( $(compgen -W "--workspace -w --json -j --help" -- "$cur") ) ;;
                     invite) COMPREPLY=( $(compgen -W "--workspace -w --email --role --json -j --help" -- "$cur") ) ;;
                 esac
             fi
@@ -304,11 +304,11 @@ _dosya() {
                         '--json[Output as JSON]'
                     ;;
                 member)
-                    _arguments '1:subcommand:(list invite)' \\
+                    _arguments '1:subcommand:(list roles invite)' \\
                         '--workspace[Workspace ID]:id' \\
                         '-w[Workspace ID]:id' \\
                         '--email[Email]:email' \\
-                        '--role[Role]:role:(Member Admin)' \\
+                        '--role[Role]:role:(Member Admin Viewer)' \\
                         '--json[Output as JSON]'
                     ;;
                 config)
@@ -415,11 +415,12 @@ complete -c dosya -n '__fish_seen_subcommand_from workspace; and __fish_seen_sub
 complete -c dosya -n '__fish_seen_subcommand_from workspace; and __fish_seen_subcommand_from delete' -l force -s f -d 'Skip confirmation'
 
 # member subcommands
-complete -c dosya -n '__fish_seen_subcommand_from member; and not __fish_seen_subcommand_from list invite' -a 'list' -d 'List members'
-complete -c dosya -n '__fish_seen_subcommand_from member; and not __fish_seen_subcommand_from list invite' -a 'invite' -d 'Invite member'
+complete -c dosya -n '__fish_seen_subcommand_from member; and not __fish_seen_subcommand_from list roles invite' -a 'list' -d 'List members'
+complete -c dosya -n '__fish_seen_subcommand_from member; and not __fish_seen_subcommand_from list roles invite' -a 'roles' -d 'List roles'
+complete -c dosya -n '__fish_seen_subcommand_from member; and not __fish_seen_subcommand_from list roles invite' -a 'invite' -d 'Invite member'
 complete -c dosya -n '__fish_seen_subcommand_from member' -l workspace -s w -x -d 'Workspace ID'
 complete -c dosya -n '__fish_seen_subcommand_from member; and __fish_seen_subcommand_from invite' -l email -x -d 'Email address'
-complete -c dosya -n '__fish_seen_subcommand_from member; and __fish_seen_subcommand_from invite' -l role -x -a 'Member Admin' -d 'Role'
+complete -c dosya -n '__fish_seen_subcommand_from member; and __fish_seen_subcommand_from invite' -l role -x -a 'Member Admin Viewer' -d 'Role'
 
 # config subcommands
 complete -c dosya -n '__fish_seen_subcommand_from config; and not __fish_seen_subcommand_from get set path' -a 'get' -d 'Get config value'

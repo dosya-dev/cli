@@ -17,7 +17,7 @@ function local(over: Partial<LocalEntry> = {}): LocalEntry {
     return { size: 3, mtimeMs: 100000, isDir: false, ...over };
 }
 function state(files: Record<string, SyncFileRecord> = {}): SyncPairState {
-    return { pairId: "p", lastFullSyncAt: 0, files, folders: {} };
+    return { pairId: "p", lastFullSyncAt: 0, files, folders: {}, permanentFailures: {} };
 }
 function run(over: Partial<ReconcileInput>): ReturnType<typeof reconcile> {
     return reconcile({

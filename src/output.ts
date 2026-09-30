@@ -202,8 +202,21 @@ export const EXIT = {
     USAGE: 2,
     AUTH: 3,
     NETWORK: 4,
+    /**
+     * The credential is live but the role may not do this (HTTP 403). Kept
+     * apart from AUTH because a script that answers 3 by re-authenticating
+     * would loop on a 403 forever - no new key fixes a missing permission.
+     */
+    FORBIDDEN: 5,
     TEMPFAIL: 75,
 } as const;
+
+/** The documented exit code for an error, by its type (and, for AuthError, its status). */
+export function exitCodeFor(err: unknown): number {
+    if (err instanceof AuthError) return err.status === 403 ? EXIT.FORBIDDEN : EXIT.AUTH;
+    if (err instanceof NetworkError) return EXIT.NETWORK;
+    return EXIT.ERROR;
+}
 
 /**
  * Print an error message and exit.
@@ -216,16 +229,13 @@ export function fatal(message: string, code: number = EXIT.ERROR): never {
 /**
  * Print an error and exit with the code that matches its type.
  *
- * Commands must use this rather than `fatal(err.message)` so that auth and
- * network failures keep their documented exit codes (3 and 4) instead of
- * collapsing into a generic 1.
+ * Commands must use this rather than `fatal(err.message)` so that auth,
+ * permission and network failures keep their documented exit codes (3, 5
+ * and 4) instead of collapsing into a generic 1.
  */
 export function fatalError(err: unknown): never {
     const message = err instanceof Error ? err.message : String(err);
-
-    const code = err instanceof AuthError ? EXIT.AUTH
-        : err instanceof NetworkError ? EXIT.NETWORK
-        : EXIT.ERROR;
+    const code = exitCodeFor(err);
 
     // Message first, then the stack - same ordering as the top-level handler
     console.error(`error: ${message}`);

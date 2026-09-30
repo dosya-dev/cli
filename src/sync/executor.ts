@@ -6,6 +6,7 @@ import { loadConfig } from "../config";
 import { debug } from "../output";
 import { SyncRemote, remoteFolderPaths, DEFAULT_SYNC_PARALLEL, UPLOAD_STREAM_THRESHOLD, type UploadItem } from "./remote";
 import { resolveRealWithinRoot } from "./safe-path";
+import { isPermanentSyncError, PERMANENT_HINT, type RefusedAction } from "./permanent";
 import { DELTA_MAX_BYTES } from "./chunker";
 import { Semaphore } from "../semaphore";
 import type { SyncAction, SyncPair, SyncProgressFn } from "./types";
@@ -41,6 +42,13 @@ export interface SyncResults {
      * whatever folders it needs.
      */
     skippedWithheldIds: string[];
+    /**
+     * Uploads and remote deletes the server refused with a 403. Their
+     * remoteIds (when they have one) are ALSO in failedRemoteIds, so the
+     * record carries forward as usual; the engine records these by path so
+     * the same refused action is not planned and logged again every cycle.
+     */
+    permanentFailures: RefusedAction[];
 }
 
 export interface ApplyResult {
@@ -176,7 +184,21 @@ export async function applyActions(
     const conflicts = actions.filter(a => a.kind === "conflict").length;
     const results: SyncResults = {
         uploadedNew: [], uploadedVersion: [], downloaded: [], movedLocal: [],
-        deletedRemoteIds: [], failedRemoteIds: [], skippedWithheldIds: [],
+        deletedRemoteIds: [], failedRemoteIds: [], skippedWithheldIds: [], permanentFailures: [],
+    };
+    /**
+     * Record a failed upload/remote-delete. A 403 is reported with the hint
+     * that it will not be retried, and listed for the engine to remember;
+     * anything else is an ordinary failure that retries next cycle.
+     */
+    const fail = (action: string, relPath: string, err: unknown) => {
+        const message = (err as Error).message;
+        if (isPermanentSyncError(err)) {
+            results.permanentFailures.push({ relPath, action, message });
+            failures.push({ action: `${action} ${relPath}`, error: `${message} (${PERMANENT_HINT})` });
+        } else {
+            failures.push({ action: `${action} ${relPath}`, error: message });
+        }
     };
     const root = pair.local;
     const folderCache = new Map<string, string>(remoteFolderPaths(folders, pair.remoteFolderId));
@@ -268,7 +290,7 @@ export async function applyActions(
             const folderId = await ensureRemoteFolder(remote, pair.remoteFolderId, folderCache, parentPath);
             prepared.push({ relPath: a.relPath, full: join(root, a.localPath), name: basename(a.relPath), folderId });
         } catch (err) {
-            failures.push({ action: `upload-new ${a.relPath}`, error: (err as Error).message });
+            fail("upload-new", a.relPath, err);
         }
     }
     const uploadItems: UploadItem[] = [];
@@ -313,7 +335,13 @@ export async function applyActions(
             results.uploadedNew.push(...r.files);
             debug(`sync: uploaded ${r.committed} new file(s)`);
         } catch (err) {
-            failures.push({ action: "upload-new batch", error: (err as Error).message });
+            // A refused manifest refuses every file in it (the role may not
+            // upload here at all), so each path is recorded, not just the batch.
+            if (isPermanentSyncError(err)) {
+                for (const item of smallNew) fail("upload-new", item.relPath, err);
+            } else {
+                failures.push({ action: "upload-new batch", error: (err as Error).message });
+            }
         }
     }
     // Large new files: stream each via upload/init, bounded by the same pool.
@@ -325,7 +353,7 @@ export async function applyActions(
             applied++;
             upDone++; upBytes += item.size; reportUp();
         } catch (err) {
-            failures.push({ action: `upload-new ${item.relPath}`, error: (err as Error).message });
+            fail("upload-new", item.relPath, err);
         }
     })));
 
@@ -343,7 +371,7 @@ export async function applyActions(
             const folderId = await ensureRemoteFolder(remote, pair.remoteFolderId, folderCache, parentOf(a.relPath));
             updates.push({ relPath: a.relPath, full, size, mime, name, remoteId: a.remoteId!, folderId });
         } catch (err) {
-            failures.push({ action: `upload-update ${a.relPath}`, error: (err as Error).message });
+            fail("upload-update", a.relPath, err);
         }
     }
     await Promise.all(updates.map(u => sem.run(async () => {
@@ -356,7 +384,7 @@ export async function applyActions(
             upDone++; upBytes += u.size; reportUp();
         } catch (err) {
             results.failedRemoteIds.push(u.remoteId);
-            failures.push({ action: `upload-update ${u.relPath}`, error: (err as Error).message });
+            fail("upload-update", u.relPath, err);
         }
     })));
 
@@ -509,7 +537,7 @@ export async function applyActions(
             applied++;
         } catch (err) {
             results.failedRemoteIds.push(a.remoteId);
-            failures.push({ action: `delete-remote ${a.relPath}`, error: (err as Error).message });
+            fail("delete-remote", a.relPath, err);
         }
     }
 

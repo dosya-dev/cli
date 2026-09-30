@@ -182,6 +182,10 @@ and pulls the remote to the original name - both sides are kept, nothing is lost
 A safety valve suppresses deletions when the local scan is incomplete or a
 suspicious mass-delete is detected.
 
+**Permission refusals:** an upload or delete the server refuses with a 403 is
+reported once and not retried by `sync watch` until the file changes locally;
+`dosya sync run` retries everything.
+
 **Ignore rules:** pass `--exclude '<glob>'` (repeatable) when adding a pair, or drop
 a `.dosyaignore` file at the sync root (one glob per line, `#` comments allowed).
 
@@ -206,6 +210,7 @@ dosya workspace delete <id>      # Delete workspace
 
 ```bash
 dosya member list                # List workspace members
+dosya member roles               # List the workspace's roles (custom ones included)
 dosya member invite              # Invite a member
 ```
 
@@ -319,8 +324,9 @@ dosya usage --json | jq '.stats | {used: .total_bytes, cap: .storage_cap_bytes}'
 | `0` | Success |
 | `1` | Runtime error (request failed, partial upload, incomplete download) |
 | `2` | Usage error (bad flag, missing argument) |
-| `3` | Authentication failure |
+| `3` | Authentication failure (the key is invalid or expired) |
 | `4` | Network failure |
+| `5` | Forbidden (the key is valid, but your role may not do this) |
 
 A recursive upload exits non-zero if any file failed, so scripts can detect
 partial success.

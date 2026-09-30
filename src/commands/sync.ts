@@ -232,7 +232,9 @@ async function syncRun(rest: string[], flags: Record<string, string>): Promise<v
         for (const p of pairs) {
             // Live progress only for an interactive, human (non-JSON, non-dry) run.
             const reporter = !dryRun && flags.json === undefined ? makeSyncReporter(p.id) : undefined;
-            const res = await runCycle(client, p, dryRun, reporter);
+            // An explicit run re-attempts what an earlier cycle was refused
+            // with a 403; the watcher never does (see sync/permanent.ts).
+            const res = await runCycle(client, p, dryRun, reporter, { retryPermanent: true });
             progressEnd(); // close the in-place line before printing the summary
             if (dryRun) {
                 if (flags.json === undefined) {

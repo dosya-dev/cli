@@ -1,5 +1,6 @@
 import { describe, it, expect } from "bun:test";
-import { timeAgo, EXIT } from "../../src/output";
+import { timeAgo, EXIT, exitCodeFor } from "../../src/output";
+import { AuthError, NetworkError } from "../../src/errors";
 
 describe("timeAgo", () => {
     it("should return 'just now' for recent timestamps", () => {
@@ -45,5 +46,18 @@ describe("EXIT codes", () => {
         expect(EXIT.USAGE).toBe(2);
         expect(EXIT.AUTH).toBe(3);
         expect(EXIT.NETWORK).toBe(4);
+    });
+});
+
+describe("exitCodeFor", () => {
+    it("separates a permission refusal from a dead credential", () => {
+        // A script that reacts to 3 by re-authenticating must not do that for a
+        // 403: the key is fine, the role is not allowed. Distinct code.
+        expect(EXIT.FORBIDDEN).toBe(5);
+        expect(exitCodeFor(new AuthError("no", 403))).toBe(EXIT.FORBIDDEN);
+        expect(exitCodeFor(new AuthError("dead", 401))).toBe(EXIT.AUTH);
+        expect(exitCodeFor(new AuthError("no status"))).toBe(EXIT.AUTH);
+        expect(exitCodeFor(new NetworkError("offline"))).toBe(EXIT.NETWORK);
+        expect(exitCodeFor(new Error("boom"))).toBe(EXIT.ERROR);
     });
 });

@@ -13,6 +13,10 @@ export class AuthError extends Error {
      * dead. A key turned away by an IP allowlist or an active-hours window is
      * still live, and callers that clean up after a dead key (see
      * `auth logout --revoke`) must not treat the two the same.
+     *
+     * The exit code follows the same split (output.ts, exitCodeFor): 401 exits
+     * 3 (auth failure), 403 exits 5 (forbidden), so a script never answers a
+     * missing permission by re-authenticating.
      */
     readonly status?: number;
 

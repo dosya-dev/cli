@@ -1,7 +1,7 @@
-import { setOutputFlags, EXIT } from "./output";
+import { setOutputFlags, EXIT, exitCodeFor } from "./output";
 import { parseArgs } from "./parse-args";
 import { setRequestTimeout, runCleanup } from "./runtime";
-import { AuthError, NetworkError, MaintenanceError } from "./errors";
+import { MaintenanceError } from "./errors";
 import pkg from "../package.json";
 
 const VERSION = pkg.version;
@@ -35,6 +35,7 @@ Commands:
   workspace create     Create a new workspace
   workspace delete     Delete a workspace
   member list          List workspace members
+  member roles         List the workspace's roles
   member invite        Invite a member
   whoami               Show current user info
   config get [key]     Show config value
@@ -62,7 +63,7 @@ Environment variables:
 
 Exit codes:
   0 success   1 error   2 usage   3 auth failure   4 network failure
-  75 paused for maintenance
+  5 forbidden (your role may not do this)   75 paused for maintenance
 
 Run 'dosya <command> --help' for command-specific help.
 
@@ -231,11 +232,12 @@ async function main(): Promise<void> {
             }
 
             case "member": {
-                const { memberList, memberInvite, memberHelp } = await import("./commands/member");
+                const { memberList, memberRoles, memberInvite, memberHelp } = await import("./commands/member");
                 if (sub === "list") return await memberList(flags);
+                if (sub === "roles") return await memberRoles(flags);
                 if (sub === "invite") return await memberInvite(flags);
                 if (flags.help !== undefined || sub === undefined) { memberHelp(); process.exit(sub ? EXIT.USAGE : 0); }
-                console.error(`Unknown subcommand: member ${sub}. Usage: dosya member list|invite`);
+                console.error(`Unknown subcommand: member ${sub}. Usage: dosya member list|roles|invite`);
                 process.exit(EXIT.USAGE);
                 break;
             }
@@ -293,9 +295,7 @@ async function main(): Promise<void> {
             console.error(err.stack);
         }
 
-        if (err instanceof AuthError) process.exit(EXIT.AUTH);
-        if (err instanceof NetworkError) process.exit(EXIT.NETWORK);
-        process.exit(EXIT.ERROR);
+        process.exit(exitCodeFor(err));
     }
 }
 

@@ -34,11 +34,25 @@ export interface SyncFileRecord {
     syncedAt: number;
 }
 
+/**
+ * A 403 the server gave for one path. Kept in state so the action is not
+ * planned again every cycle (see ./permanent.ts). `local` is the file's
+ * identity when it was refused; a different size or mtime is a new request
+ * and lifts the record. Null when the action needed no local file.
+ */
+export interface PermanentFailure {
+    action: string;
+    message: string;
+    failedAt: number;
+    local: { size: number; mtimeMs: number } | null;
+}
+
 export interface SyncPairState {
     pairId: string;
     lastFullSyncAt: number;
     files: Record<string, SyncFileRecord>;   // keyed by remoteId
     folders: Record<string, { remoteId: string }>;   // keyed by relPath
+    permanentFailures: Record<string, PermanentFailure>;   // keyed by relPath
 }
 
 /** A remote file, path-resolved relative to the pair's remote root. */

@@ -6,14 +6,21 @@ import { scanLocal, type ScanResult } from "./scan";
 import { SyncRemote, buildRemotePaths } from "./remote";
 import { reconcile } from "./reconcile";
 import { applyActions, type SyncResults } from "./executor";
-import type { SyncPair, SyncPairState, SyncFileRecord, RemoteFile, SyncAction, SyncProgressFn } from "./types";
+import { recordPermanentFailures, suppressPermanentFailures } from "./permanent";
+import { debug } from "../output";
+import type { SyncPair, SyncPairState, SyncFileRecord, RemoteFile, SyncAction, SyncProgressFn, PermanentFailure } from "./types";
 
 /**
  * Rebuild the "last synced" snapshot from the post-cycle local + remote state:
  * every file present on both sides at the same path becomes a record. Anything
  * that failed to transfer is absent from one side and simply retried next cycle.
  */
-function buildState(pairId: string, scan: ScanResult, remoteById: Map<string, RemoteFile>): SyncPairState {
+function buildState(
+    pairId: string,
+    scan: ScanResult,
+    remoteById: Map<string, RemoteFile>,
+    permanentFailures: Record<string, PermanentFailure>,
+): SyncPairState {
     const files: Record<string, SyncFileRecord> = {};
     const now = nowUnix();
     for (const r of remoteById.values()) {
@@ -26,7 +33,7 @@ function buildState(pairId: string, scan: ScanResult, remoteById: Map<string, Re
             };
         }
     }
-    return { pairId, lastFullSyncAt: now, files, folders: {} };
+    return { pairId, lastFullSyncAt: now, files, folders: {}, permanentFailures };
 }
 
 /**
@@ -55,6 +62,7 @@ function buildStateFromResults(
     remoteById: Map<string, RemoteFile>,
     prev: SyncPairState,
     res: SyncResults,
+    permanentFailures: Record<string, PermanentFailure>,
 ): SyncPairState | null {
     for (const u of res.uploadedNew) if (u.updatedAt === null) return null;
     for (const v of res.uploadedVersion) if (v.updatedAt === null) return null;
@@ -126,7 +134,7 @@ function buildStateFromResults(
         };
     }
 
-    return { pairId, lastFullSyncAt: now, files, folders: {} };
+    return { pairId, lastFullSyncAt: now, files, folders: {}, permanentFailures };
 }
 
 export interface CycleResult {
@@ -136,12 +144,23 @@ export interface CycleResult {
     failures: { action: string; error: string }[];
 }
 
+export interface CycleOptions {
+    /**
+     * Re-attempt actions the server refused with a 403 in an earlier cycle.
+     * `dosya sync run` sets this - an explicit run is the user asking to try
+     * again now. `sync watch` does not, so a refused file is reported once and
+     * then left alone until it changes locally. See ./permanent.ts.
+     */
+    retryPermanent?: boolean;
+}
+
 /** One full reconcile+apply cycle for a pair. `dryRun` plans without transferring. */
 export async function runCycle(
     client: DosyaClient,
     pair: SyncPair,
     dryRun: boolean,
     onProgress?: SyncProgressFn,
+    opts: CycleOptions = {},
 ): Promise<CycleResult> {
     const remote = new SyncRemote(client, pair.remoteWorkspaceId);
     const isExcluded = compileExcludes([...DEFAULT_IGNORES, ...pair.excludes, ...loadDosyaIgnore(pair.local)]);
@@ -153,7 +172,7 @@ export async function runCycle(
     const remoteById = buildRemotePaths(snap.files, snap.folders, pair.remoteFolderId);
     const state = loadState(pair.id);
 
-    const actions = reconcile({
+    const planned = reconcile({
         local: scan.entries,
         remote: remoteById,
         state,
@@ -162,6 +181,15 @@ export async function runCycle(
         localIncomplete: scan.incomplete,
         remoteIncomplete: snap.truncated,
     });
+
+    // Leave out what the server already refused with a 403 for an unchanged
+    // file - the reconciler plans it again every cycle, and without this the
+    // watcher retried and logged each refusal forever.
+    const gate = suppressPermanentFailures(planned, state.permanentFailures, scan.entries, opts.retryPermanent === true);
+    const actions = gate.actions;
+    if (gate.suppressed.length > 0) {
+        debug(`sync: ${gate.suppressed.length} path(s) skipped after an earlier permission refusal; 'dosya sync run' retries them`);
+    }
 
     if (dryRun) {
         return { plan: actions, applied: 0, conflicts: actions.filter(a => a.kind === "conflict").length, failures: [] };
@@ -172,7 +200,7 @@ export async function runCycle(
     // entirely - this is the common steady-state (e.g. a cron re-run of an
     // unchanged tree), where re-fetching a full paginated snapshot is pure waste.
     if (actions.length === 0) {
-        saveState(buildState(pair.id, scan, remoteById));
+        saveState(buildState(pair.id, scan, remoteById, gate.permanent));
         return { plan: actions, applied: 0, conflicts: 0, failures: [] };
     }
 
@@ -187,9 +215,13 @@ export async function runCycle(
 
     onProgress?.({ kind: "finalize" });
 
+    // This cycle's refusals join the carried-forward ones, stamped with the
+    // local file's identity so a later local change lifts them.
+    const permanent = recordPermanentFailures(gate.permanent, result.results.permanentFailures, scan.entries, nowUnix());
+
     // Build the next state from what this cycle actually did - no second scan,
     // no second snapshot. See buildStateFromResults.
-    const built = buildStateFromResults(pair.id, scan, remoteById, state, result.results);
+    const built = buildStateFromResults(pair.id, scan, remoteById, state, result.results, permanent);
     if (built) {
         saveState(built);
     } else {
@@ -199,7 +231,7 @@ export async function runCycle(
         const scan2 = await scanLocal(pair.local, isExcluded, { oneFileSystem: pair.oneFileSystem });
         const snap2 = await remote.snapshot(pair.remoteFolderId);
         const remoteById2 = buildRemotePaths(snap2.files, snap2.folders, pair.remoteFolderId);
-        saveState(buildState(pair.id, scan2, remoteById2));
+        saveState(buildState(pair.id, scan2, remoteById2, permanent));
     }
 
     return { plan: actions, applied: result.applied, conflicts: result.conflicts, failures: result.failures };
