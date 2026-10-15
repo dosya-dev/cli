@@ -57,7 +57,8 @@ function parseRetryAfter(value: string | null): number | null {
 }
 
 export class DosyaClient {
-    private apiBase: string;
+    /** The configured API origin. Readable so callers can pin resume URLs to it. */
+    readonly apiBase: string;
     private apiKey: string;
     private defaultTimeout: number;
 
@@ -131,6 +132,14 @@ export class DosyaClient {
             if (this.d1Bookmark) headers["X-D1-Bookmark"] = this.d1Bookmark;
         } else {
             debug(`Omitting credentials for cross-origin request to ${url}`);
+            // Credentials are withheld off-origin, but a request body is not a
+            // credential and must not travel either: a cross-origin PUT whose
+            // body is a local file would exfiltrate that file to whoever owns
+            // the URL. No legitimate CLI flow sends a body off the API origin,
+            // so refuse rather than stream the bytes.
+            if (opts.rawBody !== undefined || opts.body !== undefined) {
+                throw new Error(`Refusing to send a request body cross-origin to ${url}`);
+            }
         }
 
         let fetchBody: BodyInit | undefined;

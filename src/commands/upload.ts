@@ -255,7 +255,7 @@ async function uploadSingleFile(
     const mime = file.type || "application/octet-stream";
 
     // Reuse an interrupted session for this exact file, if one is on disk
-    const resumed = loadUploadSession(filePath, size);
+    const resumed = loadUploadSession(filePath, size, client.apiBase);
 
     let sessionId: string;
     let uploadUrl: string;

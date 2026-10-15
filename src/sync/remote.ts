@@ -287,7 +287,7 @@ export class SyncRemote {
      */
     async uploadViaInit(localPath: string, name: string, size: number, mime: string, folderId: string | null, fileId: string | null): Promise<UploadResult> {
         // Reuse an interrupted session for this exact file (cross-run resume).
-        const resumed = loadUploadSession(localPath, size);
+        const resumed = loadUploadSession(localPath, size, this.client.apiBase);
         let sessionId: string;
         let uploadUrl: string;
         let resumable: ResumableInfo | null;

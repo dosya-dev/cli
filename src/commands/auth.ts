@@ -2,6 +2,25 @@ import { updateConfig, deleteConfig, loadConfig, resolveApiBase, getConfigPath, 
 import { createClient, AuthError } from "../client";
 import { fatal, fatalError, log, warn, EXIT } from "../output";
 
+/**
+ * Where a person actually gets an API key.
+ *
+ * Two things were wrong with the URL this replaces,
+ * `https://dosya.dev/settings/api-keys`, and each hides the other:
+ *
+ *   Wrong host. API keys live in the dashboard at app.dosya.dev; dosya.dev is
+ *   the marketing site, which has no such page and answers a real HTTP 404.
+ *
+ *   Wrong path. The dashboard has no /settings child routes either, so even
+ *   on the right host that path falls through to the catch-all and renders
+ *   the not-found page. The dashboard is an SPA, so the server answers 200
+ *   for any path and nothing that checks a status code would notice.
+ *
+ * One constant because this is printed from two places and they drifted apart
+ * for as long as they were two literals.
+ */
+const API_KEYS_URL = "https://app.dosya.dev/profile/api";
+
 const HELP = `Authenticate with the dosya.dev API.
 
 Usage:
@@ -115,7 +134,7 @@ export async function login(flags: Record<string, string>): Promise<void> {
     }
 
     if (!apiKey || !apiKey.startsWith("dos_")) {
-        fatal("Invalid API key. Keys start with 'dos_'. Get yours at https://dosya.dev/settings/api-keys", EXIT.USAGE);
+        fatal(`Invalid API key. Keys start with 'dos_'. Get yours at ${API_KEYS_URL}`, EXIT.USAGE);
     }
 
     const apiBase = flags.api || process.env.DOSYA_API_BASE || DEFAULT_API_BASE;
@@ -159,7 +178,7 @@ export async function logout(flags: Record<string, string> = {}): Promise<void> 
             log(
                 `No API key stored in ${getConfigPath()}. DOSYA_API_KEY is set in your ` +
                 "environment; this command does not manage it - revoke it at " +
-                "https://dosya.dev/settings/api-keys",
+                API_KEYS_URL,
             );
         } else {
             log("Not authenticated - nothing to revoke.");

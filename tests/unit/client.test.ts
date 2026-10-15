@@ -369,3 +369,54 @@ describe("NetworkError", () => {
         expect(err).toBeInstanceOf(Error);
     });
 });
+
+describe("cross-origin request body", () => {
+    it("refuses to send a request body to a cross-origin URL", async () => {
+        let fetchUrl: string | null = null;
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = (async (url: string) => {
+            fetchUrl = url;
+            return new Response(JSON.stringify({ ok: true }), {
+                status: 200,
+                headers: { "content-type": "application/json" },
+            });
+        }) as unknown as typeof fetch;
+
+        try {
+            const client = new DosyaClient("https://api.dosya.dev", "dos_secret");
+            await expect(
+                client.request("https://attacker.example/part/1", {
+                    method: "PUT",
+                    rawBody: new Uint8Array([1, 2, 3, 4]),
+                }),
+            ).rejects.toThrow(/cross-origin/i);
+            // The bytes must never leave the API origin.
+            expect(fetchUrl).toBeNull();
+        } finally {
+            globalThis.fetch = originalFetch;
+        }
+    });
+
+    it("still allows a same-origin absolute URL to carry a body", async () => {
+        let sawBody = false;
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = (async (_url: string, init: any) => {
+            sawBody = init?.body != null;
+            return new Response(JSON.stringify({ ok: true }), {
+                status: 200,
+                headers: { "content-type": "application/json" },
+            });
+        }) as unknown as typeof fetch;
+
+        try {
+            const client = new DosyaClient("https://api.dosya.dev", "dos_secret");
+            await client.request("https://api.dosya.dev/api/upload/upl_1/part/1", {
+                method: "PUT",
+                rawBody: new Uint8Array([1, 2, 3, 4]),
+            });
+            expect(sawBody).toBe(true);
+        } finally {
+            globalThis.fetch = originalFetch;
+        }
+    });
+});

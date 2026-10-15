@@ -65,12 +65,37 @@ function sidecarPath(filePath: string): string {
 }
 
 /**
+ * Whether a resume URL stays on the API's own origin.
+ *
+ * Resolved the same way the client will resolve it: a value that does not start
+ * with "http" is a relative path on `apiBase`, anything else must share its
+ * origin. This mirrors DosyaClient.request so the two cannot disagree about what
+ * counts as same-origin.
+ */
+function sameOriginUrl(url: string, apiBase: string): boolean {
+    const resolved = url.startsWith("http") ? url : `${apiBase}${url}`;
+    try {
+        return new URL(resolved).origin === new URL(apiBase).origin;
+    } catch {
+        return false;
+    }
+}
+
+/**
  * Load a resumable session for this exact file.
  *
  * Size and mtime must both match - resuming against edited content would
  * assemble a corrupt object from parts of two different files.
+ *
+ * The resume URLs are also pinned to `apiBase`. A sidecar is a plain file in the
+ * target's directory, so a lower-privileged local user who can write that
+ * directory - but cannot read the target - could plant one pointing the part,
+ * status and complete URLs at a server they control. Trusting those would make
+ * the CLI open the target with the victim's authority and stream its bytes to
+ * the attacker. The server only ever issues relative `/api/upload/...` URLs, so
+ * anything off-origin is forged and the whole sidecar is refused.
  */
-export function loadUploadSession(filePath: string, size: number): UploadSidecar | null {
+export function loadUploadSession(filePath: string, size: number, apiBase: string): UploadSidecar | null {
     const p = sidecarPath(filePath);
     if (!existsSync(p)) return null;
 
@@ -80,6 +105,13 @@ export function loadUploadSession(filePath: string, size: number): UploadSidecar
         if (sidecar.file_size !== size || sidecar.mtime_ms !== Math.floor(stat.mtimeMs)) {
             debug(`Ignoring stale upload sidecar for ${filePath} (file changed)`);
             removeUploadSession(filePath);
+            return null;
+        }
+        const r = sidecar.resumable;
+        if (!r || !sameOriginUrl(r.part_upload_url, apiBase)
+            || !sameOriginUrl(r.status_url, apiBase)
+            || !sameOriginUrl(r.complete_url, apiBase)) {
+            debug(`Refusing upload sidecar for ${filePath}: resume URL is not on ${apiBase}`);
             return null;
         }
         return sidecar;

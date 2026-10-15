@@ -10,6 +10,7 @@ import {
 let dir: string;
 let filePath: string;
 const SIZE = 25;
+const API_BASE = "https://api.dosya.dev";
 
 beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "dosya-mp-"));
@@ -146,13 +147,13 @@ describe("uploadMultipart", () => {
 describe("upload session sidecar", () => {
     it("round-trips a session", () => {
         saveUploadSession(filePath, makeSidecar(filePath, "upl_9", SIZE, resumable()));
-        const loaded = loadUploadSession(filePath, SIZE);
+        const loaded = loadUploadSession(filePath, SIZE, API_BASE);
         expect(loaded?.session_id).toBe("upl_9");
     });
 
     it("rejects a sidecar when the file size changed", () => {
         saveUploadSession(filePath, makeSidecar(filePath, "upl_9", SIZE, resumable()));
-        expect(loadUploadSession(filePath, SIZE + 1)).toBeNull();
+        expect(loadUploadSession(filePath, SIZE + 1, API_BASE)).toBeNull();
     });
 
     it("rejects a sidecar when the file was modified", () => {
@@ -160,12 +161,63 @@ describe("upload session sidecar", () => {
         // Resuming against edited content would assemble a corrupt object
         const future = new Date(Date.now() + 60_000);
         utimesSync(filePath, future, future);
-        expect(loadUploadSession(filePath, SIZE)).toBeNull();
+        expect(loadUploadSession(filePath, SIZE, API_BASE)).toBeNull();
     });
 
     it("returns null once removed", () => {
         saveUploadSession(filePath, makeSidecar(filePath, "upl_9", SIZE, resumable()));
         removeUploadSession(filePath);
-        expect(loadUploadSession(filePath, SIZE)).toBeNull();
+        expect(loadUploadSession(filePath, SIZE, API_BASE)).toBeNull();
+    });
+
+    it("rejects a sidecar whose resume URLs point at a foreign origin", () => {
+        // A lower-privileged local user who can write the directory but not read
+        // the target plants a sidecar pointing the resume URLs at a server they
+        // control. Loading it must refuse rather than hand the attacker a
+        // destination for the victim's bytes.
+        const hostile: ResumableInfo = {
+            part_size: 10,
+            total_parts: 3,
+            part_upload_url: "https://attacker.example/part",
+            complete_url: "https://attacker.example/complete",
+            status_url: "https://attacker.example/status",
+        };
+        // Write the sidecar directly: saveUploadSession would accept any shape,
+        // and the planted file is what is on disk.
+        writeFileSync(
+            `${filePath}.dosya-upload`,
+            JSON.stringify(makeSidecar(filePath, "upl_9", SIZE, hostile)),
+        );
+        expect(loadUploadSession(filePath, SIZE, API_BASE)).toBeNull();
+    });
+
+    it("rejects a sidecar when even one resume URL is foreign", () => {
+        const mixed: ResumableInfo = {
+            part_size: 10,
+            total_parts: 3,
+            part_upload_url: "/api/upload/upl_9/part",
+            complete_url: "https://attacker.example/complete",
+            status_url: "/api/upload/upl_9/status",
+        };
+        writeFileSync(
+            `${filePath}.dosya-upload`,
+            JSON.stringify(makeSidecar(filePath, "upl_9", SIZE, mixed)),
+        );
+        expect(loadUploadSession(filePath, SIZE, API_BASE)).toBeNull();
+    });
+
+    it("accepts a sidecar whose URLs are same-origin absolute", () => {
+        const ok: ResumableInfo = {
+            part_size: 10,
+            total_parts: 3,
+            part_upload_url: "https://api.dosya.dev/api/upload/upl_9/part",
+            complete_url: "https://api.dosya.dev/api/upload/upl_9/complete",
+            status_url: "https://api.dosya.dev/api/upload/upl_9/status",
+        };
+        writeFileSync(
+            `${filePath}.dosya-upload`,
+            JSON.stringify(makeSidecar(filePath, "upl_9", SIZE, ok)),
+        );
+        expect(loadUploadSession(filePath, SIZE, API_BASE)?.session_id).toBe("upl_9");
     });
 });
