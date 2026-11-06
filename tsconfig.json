@@ -12,7 +12,8 @@
     // A rootDir here would reject the cross-package @dosya-dev/shared import.
     "noEmit": true,
     "paths": {
-      "@dosya-dev/shared": ["../../packages/shared/src"]
+      "@dosya-dev/shared": ["../../packages/shared/src"],
+      "@dosya-dev/shared/*": ["../../packages/shared/src/*"]
     }
   },
   "include": ["src", "tests"]

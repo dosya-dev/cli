@@ -11,6 +11,14 @@ export interface ReconcileInput {
     localIncomplete: boolean;
     /** The remote snapshot was truncated - suppress deletions for the same reason. */
     remoteIncomplete?: boolean;
+    /**
+     * The pair's exclude predicate (DEFAULT_IGNORES + excludes + .dosyaignore),
+     * the same one the local scan used. Applied to the remote side here so an
+     * ignored path is planned in neither direction: without it a remote file
+     * at an ignored path is invisible locally, gets planned as download-new,
+     * and overwrites the ignored local file the user told sync to leave alone.
+     */
+    isExcluded?: (relPath: string) => boolean;
 }
 
 function remoteChanged(r: RemoteFile, rec: SyncFileRecord): boolean {
@@ -69,8 +77,12 @@ export function reconcile(input: ReconcileInput): SyncAction[] {
 
     const localFiles = new Map<string, LocalEntry>();
     for (const [rel, e] of input.local) if (!e.isDir) localFiles.set(rel, e);
+    // Drop ignored remote paths before anything is planned for them. A tracked
+    // file that became ignored then looks absent on both sides and is left alone.
+    const remoteFiles = new Map<string, RemoteFile>();
+    for (const [id, r] of input.remote) if (!input.isExcluded?.(r.relPath)) remoteFiles.set(id, r);
     const remoteByPath = new Map<string, RemoteFile>();
-    for (const r of input.remote.values()) remoteByPath.set(r.relPath, r);
+    for (const r of remoteFiles.values()) remoteByPath.set(r.relPath, r);
 
     const actions: SyncAction[] = [];
     const processedPaths = new Set<string>();
@@ -79,7 +91,7 @@ export function reconcile(input: ReconcileInput): SyncAction[] {
     // 1) Tracked records (state keyed by remoteId).
     for (const [remoteId, rec] of Object.entries(state.files)) {
         processedRemoteIds.add(remoteId);
-        const remote = input.remote.get(remoteId);
+        const remote = remoteFiles.get(remoteId);
         const oldPath = rec.localPath;
 
         // Remote moved/renamed since last sync.
@@ -148,7 +160,7 @@ export function reconcile(input: ReconcileInput): SyncAction[] {
     }
 
     // 3) Untracked remote files.
-    for (const r of input.remote.values()) {
+    for (const r of remoteFiles.values()) {
         if (processedRemoteIds.has(r.id) || processedPaths.has(r.relPath)) continue;
         actions.push({ kind: "download-new", relPath: r.relPath, remoteId: r.id, localPath: r.relPath, size: r.size });
         processedRemoteIds.add(r.id);

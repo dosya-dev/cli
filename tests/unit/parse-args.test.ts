@@ -40,6 +40,12 @@ describe("parseArgs", () => {
         expect(result.args).toEqual(["share", "beach.jpg"]);
     });
 
+    it("treats --restrict as boolean, never swallowing the file that follows", () => {
+        const result = parseArgs(["share", "email", "--restrict", "report.pdf", "--email", "a@b.com"]);
+        expect(result.flags.restrict).toBe("");
+        expect(result.args).toEqual(["share", "email", "report.pdf"]);
+    });
+
     it("should parse long flags with values", () => {
         const result = parseArgs(["--key", "dos_abc123"]);
         expect(result.flags.key).toBe("dos_abc123");

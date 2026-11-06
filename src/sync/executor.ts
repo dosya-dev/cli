@@ -401,6 +401,16 @@ export async function applyActions(
                     failures.push({ action: `download ${a.relPath}`, error: `refused: path escapes sync root (${a.localPath})` });
                     return;
                 }
+                // A download-new is planned only for a path the local scan did
+                // not see. If something is there anyway, it is a file the user
+                // excluded from sync, or (on a case-insensitive filesystem) a
+                // local file whose name differs only by case. Either way it is
+                // not ours to replace - refuse instead of renaming over it.
+                if (a.kind === "download-new" && existsSync(full)) {
+                    results.failedRemoteIds.push(a.remoteId);
+                    failures.push({ action: `download ${a.relPath}`, error: `refused: a local file already exists at ${a.localPath} and is not part of this sync (ignored or differs only by case)` });
+                    return;
+                }
                 const tmp = `${full}.dosya-partial`;
                 try {
                     const u = byId.get(a.remoteId);

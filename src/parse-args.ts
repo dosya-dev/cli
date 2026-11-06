@@ -64,6 +64,7 @@ const BOOLEAN_FLAGS = new Set([
     "permanent",
     "quiet",
     "recursive",
+    "restrict",
     "revoke",
     "strip-metadata",
     "version",

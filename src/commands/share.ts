@@ -3,7 +3,8 @@ import { requireAuth } from "../config";
 import { ApiError } from "../errors";
 import { printTable, printJson, fatal, fatalError, log, EXIT } from "../output";
 import { Resolver } from "../resolver";
-import { applyStripMetadataFlag } from "./share-flags";
+import { applyStripMetadataFlag, buildShareEmailFlagsBody, splitEmails } from "./share-flags";
+import { shareEndpoint, type ShareTarget } from "@dosya-dev/shared/share/payload";
 import {
     isValidEmail, validateSharePassword, validateShareExpiryDays, validateShareBundle,
 } from "@dosya-dev/shared";
@@ -17,7 +18,7 @@ Usage:
   dosya share <file|folder> [flags]           Create a share link for a file or folder
   dosya share list [flags]                    List the workspace's share links
   dosya share revoke <link_id>                Revoke a share link
-  dosya share email <file|folder> --email <e> Create a link and email it
+  dosya share email <file|folder> --email <e> Create a link and email it (comma-separate several)
   dosya share bundle <file...> [flags]        Share several files as one link
 
 Create flags:
@@ -29,6 +30,7 @@ Create flags:
 Shared flags:
   --workspace, -w <id> Workspace for path lookups / listing
   --message <text>     Message body (email)
+  --restrict           Email only: the link opens only for the recipients
   --json, -j           Output as JSON
 
 Examples:
@@ -38,6 +40,7 @@ Examples:
   dosya share list -w ws_abc123
   dosya share revoke lnk_abc123
   dosya share email report.pdf --email a@b.com
+  dosya share email report.pdf --email a@b.com,c@d.com --restrict
   dosya share bundle a.pdf b.pdf --expires 14d`;
 
 export function shareHelp(): void {
@@ -185,31 +188,37 @@ async function shareEmail(args: string[], flags: Record<string, string>, client:
     if (!target) {
         fatal("File or folder required. Usage: dosya share email <file|folder> --email <address>", EXIT.USAGE);
     }
-    if (!flags.email) {
+    const emails = splitEmails(flags.email);
+    if (emails.length === 0) {
         fatal("Email required. Use --email <address>.", EXIT.USAGE);
     }
-    if (!isValidEmail(flags.email)) {
-        fatal("Invalid email address.", EXIT.USAGE);
-    }
+    const badEmail = emails.find(e => !isValidEmail(e.toLowerCase()));
+    if (badEmail) fatal(`Invalid email address: ${badEmail}`, EXIT.USAGE);
+    const pwProblem = validateSharePassword(flags.password);
+    if (pwProblem) fatal(pwProblem, EXIT.USAGE);
 
     const resolved = await new Resolver(client).resolve(target, { workspace: flags.workspace, defaultWorkspace });
     if (resolved.type !== "file" && resolved.type !== "folder") {
         fatal("share email targets a file or a folder.", EXIT.USAGE);
     }
 
-    const body: Record<string, unknown> = { email: flags.email };
-    if (flags.message) body.message = flags.message;
-    if (flags.password) body.password = flags.password;
-    applyStripMetadataFlag(body, flags);
+    const shareTarget: ShareTarget = resolved.type === "folder"
+        ? { kind: "folder", folderId: encodeURIComponent(resolved.id) }
+        : { kind: "file", fileIds: [encodeURIComponent(resolved.id)] };
+    const body = buildShareEmailFlagsBody(shareTarget, flags);
 
-    const path = resolved.type === "folder"
-        ? `/api/folders/${encodeURIComponent(resolved.id)}/share-email`
-        : `/api/files/${encodeURIComponent(resolved.id)}/share-email`;
-
-    const data = await client.post<{ ok: boolean; share_url: string }>(path, body);
+    const data = await client.post<{ ok: boolean; share_url: string; access_mode?: string }>(
+        shareEndpoint(shareTarget, "email"), body,
+    );
 
     if (flags.json !== undefined) printJson(data);
-    else log(`Emailed ${flags.email}: ${data.share_url}`);
+    else {
+        // Say who can open it: an emailed link is public unless --restrict was given.
+        const reach = data.access_mode === "restricted"
+            ? "only the recipients can open it"
+            : "anyone with the link can open it";
+        log(`Emailed ${emails.join(", ")} (${reach}): ${data.share_url}`);
+    }
 }
 
 async function shareBundle(args: string[], flags: Record<string, string>, client: DosyaClient, defaultWorkspace?: string): Promise<void> {

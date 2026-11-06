@@ -180,6 +180,7 @@ export async function runCycle(
         conflictStrategy: pair.conflictStrategy,
         localIncomplete: scan.incomplete,
         remoteIncomplete: snap.truncated,
+        isExcluded,
     });
 
     // Leave out what the server already refused with a 403 for an unchanged

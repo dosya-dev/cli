@@ -145,3 +145,41 @@ describe("reconcile - deletion safety valve", () => {
         expect(acts.filter(a => a.kind === "delete-remote")).toEqual([]);
     });
 });
+
+describe("reconcile - exclude rules apply to the remote side too", () => {
+    // Regression: `.dosyaignore` / pair excludes were applied only to the local
+    // scan, so a remote file at an ignored path was invisible locally, planned
+    // as download-new, and written over the ignored local file.
+    const isExcluded = (rel: string) => rel.split("/").some(seg => seg === "secrets.txt" || seg === "node_modules");
+
+    it("remote-only file at an ignored path → no action", () => {
+        const acts = run({
+            remote: new Map([["r1", remoteFile({ name: "secrets.txt", relPath: "secrets.txt" })]]),
+            isExcluded,
+        });
+        expect(acts).toEqual([]);
+    });
+
+    it("remote-only file inside an ignored folder → no action", () => {
+        const acts = run({
+            remote: new Map([["r1", remoteFile({ name: "x.js", relPath: "node_modules/x.js" })]]),
+            isExcluded,
+        });
+        expect(acts).toEqual([]);
+    });
+
+    it("tracked file that became ignored → no delete-remote and no download", () => {
+        // User added the pattern after a sync; local scan now hides the file.
+        const acts = run({
+            remote: new Map([["r1", remoteFile({ name: "secrets.txt", relPath: "secrets.txt", updatedAt: 200, version: 2 })]]),
+            state: state({ r1: rec({ remoteName: "secrets.txt", localPath: "secrets.txt" }) }),
+            isExcluded,
+        });
+        expect(acts).toEqual([]);
+    });
+
+    it("non-ignored remote file still downloads when a predicate is given", () => {
+        const acts = run({ remote: new Map([["r1", remoteFile()]]), isExcluded });
+        expect(acts.map(a => a.kind)).toEqual(["download-new"]);
+    });
+});
