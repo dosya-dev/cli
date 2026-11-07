@@ -1,5 +1,5 @@
 import { join, dirname, basename } from "path";
-import { mkdirSync, renameSync, rmSync, existsSync } from "fs";
+import { mkdirSync, renameSync, rmSync, existsSync, lstatSync } from "fs";
 import { stat } from "fs/promises";
 import { getLongTimeout } from "../runtime";
 import { loadConfig } from "../config";
@@ -172,6 +172,22 @@ async function prewarmFolders(
  * downloads mkdir -p locally and write atomically. Per-action failures are
  * collected rather than aborting the whole cycle.
  */
+/** True when `to` exists and is not the same filesystem object as `from`. */
+export function occupiedByOtherFile(from: string, to: string): boolean {
+    let target;
+    try {
+        target = lstatSync(to, { bigint: true });
+    } catch {
+        return false; // nothing there
+    }
+    try {
+        const source = lstatSync(from, { bigint: true });
+        return !(source.dev === target.dev && source.ino === target.ino && source.ino !== 0n);
+    } catch {
+        return true; // the source is gone; do not let a stale move clobber what is there
+    }
+}
+
 export async function applyActions(
     remote: SyncRemote,
     pair: SyncPair,
@@ -508,6 +524,17 @@ export async function applyActions(
             if (!to || !from) {
                 results.failedRemoteIds.push(a.remoteId);
                 failures.push({ action: `move-local ${a.fromPath}`, error: `refused: path escapes sync root (${!from ? a.fromPath : a.toPath})` });
+                continue;
+            }
+            // Never rename over a different file. The planner only checks its
+            // own scan, which leaves out ignored files and compares paths by
+            // exact case, so a remote rename to `SECRET.TXT` reached here with
+            // an ignored `secret.txt` on disk and renameSync replaced it
+            // (bounty 2026-11-07). A case-only rename of the file itself is
+            // the same inode on a case-folding filesystem and is allowed.
+            if (occupiedByOtherFile(from, to)) {
+                results.failedRemoteIds.push(a.remoteId);
+                failures.push({ action: `move-local ${a.fromPath}`, error: `refused: ${a.toPath} already exists locally` });
                 continue;
             }
             mkdirSync(dirname(to), { recursive: true });

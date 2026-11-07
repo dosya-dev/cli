@@ -642,6 +642,7 @@ async function downloadRecursive(
     });
 
     const outDir = flags.output && flags.output !== "-" ? flags.output : ".";
+    const isForce = flags.force !== undefined;
     const remote = new SyncRemote(client, folder.workspaceId);
     const snap = await remote.snapshot(folder.id || null);
     const files = [...buildRemotePaths(snap.files, snap.folders, folder.id || null).values()];
@@ -671,12 +672,23 @@ async function downloadRecursive(
                 // sync/safe-path.ts.
                 const full = resolveRealWithinRoot(outDir, f.relPath);
                 if (!full) throw new Error("refusing unsafe path from server");
+                // Never clobber a local file without --force, same as single-file
+                // and --zip downloads. Anyone who can add a file to the workspace
+                // picks its name, so a remote `.env` would otherwise silently
+                // replace the one in the project being downloaded into.
+                const exists = "already exists. Use --force to overwrite.";
+                if (!isForce && existsSync(full)) throw new Error(exists);
                 mkdirSync(dirname(full), { recursive: true });
                 const res = await fetch(u.url, { signal: AbortSignal.timeout(getLongTimeout(600_000)) });
                 // Check res.ok only - touching res.body before Bun.write(res) hangs it.
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const tmp = `${full}.dosya-partial`;
                 await Bun.write(tmp, res);
+                // Re-check: the file may have appeared during the fetch.
+                if (!isForce && existsSync(full)) {
+                    unlinkSync(tmp);
+                    throw new Error(exists);
+                }
                 renameSync(tmp, full);
                 downloaded++;
                 if (!isJson && process.stderr.isTTY) process.stderr.write(`\r  ${downloaded}/${files.length} files`);

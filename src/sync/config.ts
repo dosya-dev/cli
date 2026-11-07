@@ -71,8 +71,17 @@ export function saveSyncConfig(config: SyncConfig): void {
     }
 }
 
+/**
+ * Whether this platform's default filesystems fold case. On Windows and macOS
+ * `.GIT` and `.git` are the same directory, so an exclude has to match both or
+ * a remote path that differs only by case walks straight into an ignored one
+ * (bounty 2026-11-07: a remote `.GIT/hooks/pre-commit` landed in the local
+ * `.git`, and a rename to `.DOSYAIGNORE` replaced the real `.dosyaignore`).
+ */
+export const CASE_INSENSITIVE_FS = process.platform === "win32" || process.platform === "darwin";
+
 /** Translate one glob (`*`, `**`, `?`) to an anchored RegExp. */
-function globToRegExp(glob: string): RegExp {
+function globToRegExp(glob: string, caseInsensitive: boolean): RegExp {
     let re = "";
     for (let i = 0; i < glob.length; i++) {
         const c = glob[i];
@@ -85,7 +94,7 @@ function globToRegExp(glob: string): RegExp {
             re += c.replace(/[.+^${}()|[\]\\]/g, "\\$&");
         }
     }
-    return new RegExp(`^${re}$`);
+    return new RegExp(`^${re}$`, caseInsensitive ? "i" : "");
 }
 
 /**
@@ -93,8 +102,11 @@ function globToRegExp(glob: string): RegExp {
  * root-relative path matches a glob, or any single segment does (so
  * `node_modules` catches `node_modules/x/y`).
  */
-export function compileExcludes(globs: string[]): (relPath: string) => boolean {
-    const regexes = globs.filter(Boolean).map(globToRegExp);
+export function compileExcludes(
+    globs: string[],
+    caseInsensitive: boolean = CASE_INSENSITIVE_FS,
+): (relPath: string) => boolean {
+    const regexes = globs.filter(Boolean).map(g => globToRegExp(g, caseInsensitive));
     if (regexes.length === 0) return () => false;
     return (relPath: string): boolean => {
         const segments = relPath.split("/");
